@@ -20,5 +20,6 @@ fi
 # Apply the dotfiles from this repo (chezmoi reads .chezmoiroot -> home/).
 chezmoi init --apply --source "$REPO_DIR"
 
-echo "dotenv: applied. Open a fresh kitty/tmux/zsh session to see the changes."
-echo "Follow-ups not yet wired: Brewfile toolchain, vim config, full devcontainer setup."
+echo "dotenv: applied. Dependencies are installed automatically by chezmoi"
+echo "  (Homebrew on macOS; apt + official installers on Debian/Ubuntu)."
+echo "Open a fresh kitty/tmux/zsh session to see the changes."

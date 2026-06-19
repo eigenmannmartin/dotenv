@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# dotenv: install runtime dependencies. Runs on `chezmoi apply` whenever this
+# script changes. Idempotent and self-gating (skips GUI bits in containers).
+set -uo pipefail
+
+echo "==> dotenv: installing packages ({{ .chezmoi.os }})"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+is_container() {
+  [ -e /.dockerenv ] || [ -e /run/.containerenv ] \
+    || [ -n "${REMOTE_CONTAINERS:-}" ] || [ -n "${CODESPACES:-}" ] \
+    || [ -n "${container:-}" ]
+}
+
+{{ if eq .chezmoi.os "darwin" -}}
+# ----------------------------- macOS (Homebrew) ---------------------------
+if have brew; then
+  # --no-upgrade: install only what's missing; don't churn already-installed tools.
+  brew bundle --no-upgrade --file "{{ .chezmoi.workingTree }}/Brewfile" || echo "WARN: brew bundle had failures"
+else
+  echo "WARN: Homebrew not found — install from https://brew.sh and re-run 'chezmoi apply'."
+fi
+
+{{ else if eq .chezmoi.os "linux" -}}
+# --------------------------- Linux (Debian/Ubuntu) ------------------------
+SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+
+if have apt-get; then
+  export DEBIAN_FRONTEND=noninteractive
+  $SUDO apt-get update -qq || true
+  $SUDO apt-get install -y -qq \
+    zsh tmux git curl unzip ca-certificates fontconfig ripgrep fzf \
+    || echo "WARN: some apt packages failed to install"
+else
+  echo "WARN: apt-get not found; this installer targets Debian/Ubuntu."
+fi
+
+# atuin — not reliably packaged in apt; use the official installer (-> ~/.local/bin)
+if ! have atuin; then
+  echo "==> installing atuin"
+  curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh || echo "WARN: atuin install failed"
+fi
+
+# oh-my-posh — official installer (-> ~/.local/bin)
+if ! have oh-my-posh; then
+  echo "==> installing oh-my-posh"
+  mkdir -p "$HOME/.local/bin"
+  curl -s https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin" \
+    || echo "WARN: oh-my-posh install failed"
+fi
+
+# Desktop-only (skipped in containers): kitty + FiraCode Nerd Font
+if is_container; then
+  echo "==> container detected: skipping kitty + fonts (host-only)"
+else
+  if ! have kitty; then
+    echo "==> installing kitty"
+    curl -L https://sw.kovidgoyal.net/kitty/installer.sh | sh /dev/stdin launch=n \
+      || echo "WARN: kitty install failed"
+  fi
+  if ! fc-list 2>/dev/null | grep -qi "FiraCode Nerd Font"; then
+    echo "==> installing FiraCode Nerd Font"
+    FONT_DIR="$HOME/.local/share/fonts"; mkdir -p "$FONT_DIR"
+    tmpzip="$(mktemp)"
+    if curl -fLso "$tmpzip" \
+        https://github.com/ryanoasis/nerd-fonts/releases/latest/download/FiraCode.zip; then
+      unzip -oq "$tmpzip" -d "$FONT_DIR" && fc-cache -f "$FONT_DIR" >/dev/null 2>&1
+    else
+      echo "WARN: FiraCode Nerd Font download failed"
+    fi
+    rm -f "$tmpzip"
+  fi
+fi
+
+{{ else -}}
+echo "WARN: unsupported OS '{{ .chezmoi.os }}' — install tmux/atuin/oh-my-posh manually."
+{{ end -}}
+
+echo "==> dotenv: package step done"

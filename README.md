@@ -56,9 +56,23 @@ source state (`dot_zshrc` → `~/.zshrc`, etc.). Repo-meta files at the root
 scrub GPG card key-stubs on (re)insert. These install to `/etc/udev/rules.d`
 and `/usr/local/bin` on a real Linux host only.
 
+## Dependencies & platforms
+
+`chezmoi apply` installs everything automatically — no separate step:
+
+- **macOS**: Homebrew via [`Brewfile`](Brewfile) (tmux, atuin, oh-my-posh, fzf,
+  ripgrep, + casks kitty & FiraCode Nerd Font).
+- **Debian/Ubuntu**: `apt` for zsh/tmux/git/ripgrep/fzf + official installers for
+  atuin & oh-my-posh; kitty + Nerd Font on desktops only (skipped in containers).
+- **tpm + all tmux plugins** are cloned and installed on both.
+
+Installers are idempotent, self-gating (GUI bits skipped in containers), and live
+in [`home/.chezmoiscripts/`](home/.chezmoiscripts). On a fresh Ubuntu workstation
+you may still want `chsh -s "$(which zsh)"` to make zsh your login shell.
+
 ## Follow-ups (not yet wired)
 
-- Brewfile toolchain (`git-delta`, `eza`, `bat`, `fd`, `zoxide`, zsh plugins) + container subset
+- Toolchain wiring (`git-delta`, `eza`, `bat`, `fd`, `zoxide` + zsh aliases)
 - Portable `~/.vimrc`
-- Full zsh modernization (history, fzf, zoxide, fast compinit)
+- Full zsh modernization (history tuning, fzf keybindings, zoxide, fast compinit)
 - devcontainer wiring (`dotfiles.repository`, privileged yubikey install as a chezmoi `run_onchange_` script)

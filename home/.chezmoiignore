@@ -1,6 +1,7 @@
 {{/* Patterns are matched against TARGET paths (relative to $HOME). */}}
 
-{{/* kitty is a macOS host GUI terminal — never apply it inside Linux containers. */}}
-{{ if ne .chezmoi.os "darwin" }}
+{{/* kitty is a desktop GUI terminal: apply on macOS/Linux desktops, but skip
+     inside containers / Codespaces / headless (Docker + Podman markers). */}}
+{{ if or (stat "/.dockerenv") (stat "/run/.containerenv") (env "REMOTE_CONTAINERS") (env "CODESPACES") }}
 .config/kitty
 {{ end }}

@@ -1,4 +1,7 @@
 
+# Ensure ~/.local/bin (chezmoi / atuin / oh-my-posh installers land here) is on PATH.
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
+
 # Homebrew (host only — guarded so a Linux container without it no-ops).
 [ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
 

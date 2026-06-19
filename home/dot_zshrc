@@ -1,4 +1,4 @@
-eval "$(oh-my-posh init zsh)"
+command -v oh-my-posh >/dev/null && eval "$(oh-my-posh init zsh)"
 
 # Added by LM Studio CLI (lms)
 export PATH="$PATH:/Users/martin/.lmstudio/bin"
@@ -20,7 +20,7 @@ _op_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
 [ -S "$_op_sock" ] && export SSH_AUTH_SOCK="$_op_sock"
 unset _op_sock
 
-. "$HOME/.local/bin/env"
+[ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
 
 # --- atuin: better shell history (local only — no server sync) ------------
 command -v atuin >/dev/null && eval "$(atuin init zsh)"

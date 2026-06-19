@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# dotenv: install the tmux plugin manager (tpm) and all plugins from ~/.tmux.conf.
+# Runs after packages so tmux already exists. Idempotent.
+set -uo pipefail
+
+TPM_DIR="$HOME/.tmux/plugins/tpm"
+
+if ! command -v git >/dev/null 2>&1; then
+  echo "WARN: git missing; skipping tmux plugins"; exit 0
+fi
+
+if [ ! -d "$TPM_DIR" ]; then
+  echo "==> cloning tpm"
+  git clone -q https://github.com/tmux-plugins/tpm "$TPM_DIR" \
+    || { echo "WARN: tpm clone failed"; exit 0; }
+fi
+
+if command -v tmux >/dev/null 2>&1; then
+  echo "==> installing tmux plugins"
+  "$TPM_DIR/bin/install_plugins" >/dev/null 2>&1 || echo "WARN: tmux plugin install had issues"
+else
+  echo "WARN: tmux not installed yet; run 'prefix + I' inside tmux later"
+fi
+
+echo "==> dotenv: tmux plugins done"
