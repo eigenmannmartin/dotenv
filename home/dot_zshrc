@@ -22,6 +22,9 @@ unset _op_sock
 
 . "$HOME/.local/bin/env"
 
+# --- atuin: better shell history (local only — no server sync) ------------
+command -v atuin >/dev/null && eval "$(atuin init zsh)"
+
 # --- Auto-start tmux (interactive, top-level shells only) -----------------
 # Skips when: already in tmux, non-interactive, no tty, VS Code / JetBrains
 # terminals, devcontainers / Codespaces (Docker + Podman), or CI.

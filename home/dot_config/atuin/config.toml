@@ -1,0 +1,8 @@
+# atuin — LOCAL ONLY. No server sync: history stays on this machine.
+# To enable sync later: `atuin register`/`atuin login` and flip auto_sync = true.
+auto_sync = false
+update_check = false
+
+# Search UI
+style = "compact"
+inline_height = 25
