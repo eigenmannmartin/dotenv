@@ -132,4 +132,18 @@ if have delta && have git; then
   git config --global merge.conflictStyle zdiff3
 fi
 
+# k9s: activate the Catppuccin Macchiato skin (shipped to ~/.config/k9s/skins)
+# once k9s has written its config. Idempotent; no-op if k9s/config is absent.
+if have k9s; then
+  _k9s_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/k9s/config.yaml"
+  if [ -f "$_k9s_cfg" ] && ! grep -q 'skin:' "$_k9s_cfg"; then
+    python3 - "$_k9s_cfg" <<'PY' 2>/dev/null || true
+import sys
+p = sys.argv[1]; s = open(p).read()
+if 'skin:' not in s and '  ui:\n' in s:
+    open(p, 'w').write(s.replace('  ui:\n', '  ui:\n    skin: catppuccin-macchiato\n', 1))
+PY
+  fi
+fi
+
 echo "==> dotenv: package step done"
