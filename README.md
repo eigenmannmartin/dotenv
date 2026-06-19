@@ -9,7 +9,7 @@ tooling collision — this is a *dotfiles* repo, not env-var loading.)
 A new machine (or a container with `git`):
 
 ```sh
-sh -c "$(curl -fsLS https://get.chezmoi.io)" -- init --apply git@github.com:eigenmann/dotenv.git
+sh -c "$(curl -fsLS https://get.chezmoi.io)" -- init --apply git@github.com:eigenmannmartin/dotenv.git
 ```
 
 …or from a local clone:
@@ -35,6 +35,7 @@ source state (`dot_zshrc` → `~/.zshrc`, etc.). Repo-meta files at the root
 | `~/.config/oh-my-posh/config.omp.json` | Catppuccin prompt: per-project **color bar**, **git status**, **transient** + **right-prompt**, **kube-context guard** |
 | `~/.config/nvim` | **LazyVim** + Catppuccin Macchiato + **lang extras** (Go/Py/Docker/k8s/Helm/Dart + DAP); `lazy-lock` pinned |
 | `~/.config/atuin/config.toml` | atuin shell history — **synced to the home-network server** (set `sync_address`) |
+| `~/.config/{k9s,lazygit,gh-dash,direnv}` | k9s (blue skin + full logs), lazygit & gh-dash themes, direnv `use_op` secrets helper |
 
 ## Per-project prompt badge
 
@@ -113,9 +114,11 @@ Container & Kubernetes inspection (macOS via [`Brewfile`](Brewfile); `docker`,
 Set `sync_address` in [`atuin/config.toml`](home/dot_config/atuin/config.toml), then
 once per machine: `atuin login -u <user> -k <key>` (key/pass in 1Password) + `atuin sync`.
 
-**Dev Containers** — VS Code can bootstrap this setup automatically: set
-`"dotfiles.repository": "eigenmann/dotenv"` (+ `"dotfiles.installCommand": "install.sh"`)
-in your VS Code settings; the host-only bits skip themselves inside containers.
+**Dev Containers** — the [`devcontainer`](https://github.com/devcontainers/cli) CLI is
+installed (`devcontainer up` / `exec` / `build` from the terminal). VS Code can also
+bootstrap this setup automatically: set `"dotfiles.repository": "eigenmannmartin/dotenv"`
+(+ `"dotfiles.installCommand": "install.sh"`) in your VS Code settings; the host-only
+bits skip themselves inside containers.
 
 ## Neovim (LazyVim)
 
@@ -183,4 +186,4 @@ you may still want `chsh -s "$(which zsh)"` to make zsh your login shell.
 - More aliases / abbreviations (e.g. zsh-abbr)
 - Portable `~/.vimrc` (plain `vim` fallback; Neovim/LazyVim already wired)
 - zsh history tuning + fast `compinit`
-- devcontainer wiring (`dotfiles.repository`, privileged yubikey install as a chezmoi `run_onchange_` script)
+- devcontainer: privileged yubikey install as a chezmoi `run_onchange_` script (CLI + `dotfiles.repository` are done)

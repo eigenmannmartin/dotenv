@@ -164,4 +164,11 @@ if have gh; then
     || gh extension install dlvhdr/gh-dash >/dev/null 2>&1 || true
 fi
 
+# Dev Containers CLI (build / up / exec devcontainers from the terminal). npm global;
+# needs node (Brewfile / apt nodejs). Tolerant — Linux may need a writable npm prefix.
+if have npm && ! have devcontainer; then
+  npm install -g @devcontainers/cli >/dev/null 2>&1 \
+    || echo "WARN: devcontainer CLI install failed (npm -g; set a user npm prefix on Linux)"
+fi
+
 echo "==> dotenv: package step done"
