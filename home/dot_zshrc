@@ -1,4 +1,43 @@
-command -v oh-my-posh >/dev/null && eval "$(oh-my-posh init zsh)"
+# --- oh-my-posh prompt (Catppuccin Macchiato + per-project badge) ---------
+if command -v oh-my-posh >/dev/null; then
+  _omp_cfg="$HOME/.config/oh-my-posh/config.omp.json"
+  if [[ -r "$_omp_cfg" ]]; then
+    eval "$(oh-my-posh init zsh --config "$_omp_cfg")"
+  else
+    eval "$(oh-my-posh init zsh)"
+  fi
+  unset _omp_cfg
+fi
+
+# --- per-project color badge (sets env vars the prompt segment reads) ------
+# Folders under ~/code get a colored badge in the prompt: pinned colors first,
+# otherwise a stable color auto-derived from the project name.
+typeset -gA DOTENV_PROJECT_COLOR_MAP=(
+  hsg        '#a6da95'   # green
+  bechterew  '#8aadf4'   # blue
+)
+typeset -ga DOTENV_PROJECT_PALETTE=(
+  '#ed8796' '#f5a97f' '#eed49f' '#a6da95' '#8bd5ca' '#7dc4e4' '#8aadf4' '#c6a0f6' '#f5bde6' '#f0c6c6'
+)
+_dotenv_project_badge() {
+  local root="$HOME/code" proj=""
+  [[ "$PWD/" == "$root"/* ]] && proj="${${PWD#$root/}%%/*}"
+  if [[ -z "$proj" ]]; then
+    unset DOTENV_PROJECT DOTENV_PROJECT_COLOR
+    return
+  fi
+  export DOTENV_PROJECT="$proj"
+  if [[ -n "${DOTENV_PROJECT_COLOR_MAP[$proj]}" ]]; then
+    export DOTENV_PROJECT_COLOR="${DOTENV_PROJECT_COLOR_MAP[$proj]}"
+  else
+    local i c sum=0
+    for (( i=1; i<=${#proj}; i++ )); do c=$proj[i]; sum=$(( (sum * 31 + #c) % 100000007 )); done
+    export DOTENV_PROJECT_COLOR="${DOTENV_PROJECT_PALETTE[$(( sum % ${#DOTENV_PROJECT_PALETTE} + 1 ))]}"
+  fi
+}
+autoload -Uz add-zsh-hook
+add-zsh-hook chpwd _dotenv_project_badge
+_dotenv_project_badge
 
 # Added by LM Studio CLI (lms)
 export PATH="$PATH:/Users/martin/.lmstudio/bin"
