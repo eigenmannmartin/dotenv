@@ -132,18 +132,28 @@ if have delta && have git; then
   git config --global merge.conflictStyle zdiff3
 fi
 
-# k9s: activate the Catppuccin Macchiato skin (shipped to ~/.config/k9s/skins)
-# once k9s has written its config. Idempotent; no-op if k9s/config is absent.
+# k9s: ship the (blue-accented) Catppuccin Macchiato skin via ~/.config/k9s/skins
+# and patch our prefs — blue skin + full logs — into k9s's own config once it has
+# written one. config.yaml is k9s-managed (+ machine paths) so we patch in place,
+# idempotently, rather than tracking it. No-op if k9s/config is absent.
 if have k9s; then
   _k9s_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/k9s/config.yaml"
-  if [ -f "$_k9s_cfg" ] && ! grep -q 'skin:' "$_k9s_cfg"; then
-    python3 - "$_k9s_cfg" <<'PY' 2>/dev/null || true
-import sys
+  [ -f "$_k9s_cfg" ] && python3 - "$_k9s_cfg" <<'PY' 2>/dev/null || true
+import sys, re
 p = sys.argv[1]; s = open(p).read()
-if 'skin:' not in s and '  ui:\n' in s:
-    open(p, 'w').write(s.replace('  ui:\n', '  ui:\n    skin: catppuccin-macchiato\n', 1))
+def setk(block, key, val, s):
+    if re.search(rf'^    {key}:', s, re.M):
+        return re.sub(rf'^    {key}:.*$', f'    {key}: {val}', s, count=1, flags=re.M)
+    if re.search(rf'^  {block}:\s*$', s, re.M):
+        return re.sub(rf'^  {block}:\s*$', f'  {block}:\n    {key}: {val}', s, count=1, flags=re.M)
+    return s
+if 'skin:' not in s:
+    s = setk('ui', 'skin', 'catppuccin-macchiato', s)
+s = setk('logger', 'tail', '5000', s)
+s = setk('logger', 'buffer', '50000', s)
+s = setk('logger', 'textWrap', 'true', s)
+open(p, 'w').write(s)
 PY
-  fi
 fi
 
 echo "==> dotenv: package step done"

@@ -89,7 +89,7 @@ Container & Kubernetes inspection (macOS via [`Brewfile`](Brewfile); `docker`,
 | `lazydocker` | TUI dashboard for Docker — containers, images, volumes, logs |
 | `ctop` | top-like live CPU/mem/net per running container |
 | `dive` | explore a Docker image layer by layer to find wasted space |
-| `k9s` | full-screen TUI to navigate & manage Kubernetes clusters (Catppuccin Macchiato skin) |
+| `k9s` | full-screen TUI for Kubernetes — Catppuccin Macchiato skin (blue-accented), configured to show full logs |
 | `kubectx` | switch between Kubernetes clusters/contexts by name |
 | `kubens` | switch the active Kubernetes namespace |
 | `stern` | tail & color-code logs from multiple pods at once |
