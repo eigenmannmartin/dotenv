@@ -1,0 +1,6 @@
+{{/* Patterns are matched against TARGET paths (relative to $HOME). */}}
+
+{{/* kitty is a macOS host GUI terminal — never apply it inside Linux containers. */}}
+{{ if ne .chezmoi.os "darwin" }}
+.config/kitty
+{{ end }}

@@ -1,0 +1,37 @@
+eval "$(oh-my-posh init zsh)"
+
+# Added by LM Studio CLI (lms)
+export PATH="$PATH:/Users/martin/.lmstudio/bin"
+export PATH="$PATH:/Users/martin/flutter/bin"
+# End of LM Studio CLI section
+
+# The following lines have been added by Docker Desktop to enable Docker CLI completions.
+fpath=(/Users/martin/.docker/completions $fpath)
+autoload -Uz compinit
+compinit
+# End of Docker CLI completions
+export PATH=$PATH:/Users/martin/.runai/bin
+[ -x /Users/martin/.runai/bin/runai ] && source <(/Users/martin/.runai/bin/runai completion zsh)
+
+# --- 1Password SSH agent (host only) --------------------------------------
+# Point SSH at the 1Password agent socket only when it exists, so that inside
+# devcontainers/Codespaces the auto-forwarded SSH_AUTH_SOCK is left untouched.
+_op_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+[ -S "$_op_sock" ] && export SSH_AUTH_SOCK="$_op_sock"
+unset _op_sock
+
+. "$HOME/.local/bin/env"
+
+# --- Auto-start tmux (interactive, top-level shells only) -----------------
+# Skips when: already in tmux, non-interactive, no tty, VS Code / JetBrains
+# terminals, devcontainers / Codespaces (Docker + Podman), or CI.
+# Disable per-shell with TMUX_AUTOSTART=0.  Non-exec on purpose: if ~/.tmux.conf
+# is broken the login shell still survives.
+if [[ -z "$TMUX" && -o interactive && -t 1 \
+      && "${TMUX_AUTOSTART:-1}" != "0" \
+      && "$TERM_PROGRAM" != "vscode" \
+      && -z "$VSCODE_INJECTION$REMOTE_CONTAINERS$CODESPACES$CI$TERMINAL_EMULATOR" \
+      && ! -e /.dockerenv && ! -e /run/.containerenv ]] \
+   && command -v tmux >/dev/null; then
+  tmux new-session -A -s main
+fi

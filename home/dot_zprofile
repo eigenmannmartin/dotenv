@@ -1,0 +1,6 @@
+
+# Homebrew (host only — guarded so a Linux container without it no-ops).
+[ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
+
+# Added by `rbenv init` on Sat Jan 31 16:38:40 CET 2026
+command -v rbenv >/dev/null && eval "$(rbenv init - --no-rehash zsh)"
