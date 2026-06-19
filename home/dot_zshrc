@@ -163,6 +163,40 @@ if command -v direnv >/dev/null; then
   eval "$(direnv hook zsh)"
 fi
 
+# mise: per-project tool versions (Go/Python/Node/Dart) + tasks — activates on cd
+command -v mise >/dev/null && eval "$(mise activate zsh)"
+
+# kubectl: kubecolor wrapper (colorized) + `k` shorthand + completion
+if command -v kubectl >/dev/null; then
+  source <(kubectl completion zsh) 2>/dev/null
+  if command -v kubecolor >/dev/null; then
+    alias kubectl=kubecolor; alias k=kubecolor
+    compdef kubecolor=kubectl 2>/dev/null
+  else
+    alias k=kubectl
+  fi
+  compdef k=kubectl 2>/dev/null
+fi
+
+# gh-dash: GitHub PR/issue dashboard (`ghd`)
+command -v gh >/dev/null && alias ghd='gh dash'
+
+# git worktree helper: gwt <branch> -> linked worktree in a sibling dir (+ cd into it)
+gwt() {
+  local top br dir
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || { print -u2 "gwt: not in a git repo"; return 1; }
+  br=${1:?usage: gwt <branch>}
+  dir="${top}.${br//\//-}"
+  [[ -d "$dir" ]] && { cd "$dir"; return; }
+  if git show-ref --quiet "refs/heads/$br"; then git worktree add "$dir" "$br"
+  else git worktree add -b "$br" "$dir"; fi && cd "$dir"
+}
+gwt-rm() {  # gwt-rm <branch>: remove the worktree created by gwt
+  local main br=${1:?usage: gwt-rm <branch>}
+  main=$(git worktree list --porcelain 2>/dev/null | awk 'NR==1{print $2}')
+  [[ -n "$main" ]] && git worktree remove "${main}.${br//\//-}"
+}
+
 # Colored man pages via bat
 command -v bat >/dev/null && export MANPAGER="sh -c 'col -bx | bat -l man -p'" MANROFFOPT='-c'
 

@@ -1,8 +1,19 @@
-# atuin — LOCAL ONLY. No server sync: history stays on this machine.
-# To enable sync later: `atuin register`/`atuin login` and flip auto_sync = true.
-auto_sync = false
+# atuin — sync shell history to the self-hosted server on the home network.
+#
+# One-time per machine (after `chezmoi apply`):
+#   atuin login -u <user> -p <pass> -k <key>   # keep pass/key in 1Password
+#   atuin sync                                  # initial pull
+# The encryption key never leaves your machines; the server only stores ciphertext.
+#
+# >>> Set sync_address to your home atuin server (host:port). <<<
+auto_sync = true
 update_check = false
+sync_frequency = "5m"
+sync_address = "http://CHANGE-ME.home:8888"
 
 # Search UI
 style = "compact"
 inline_height = 25
+
+[sync]
+records = true   # v2 sync protocol

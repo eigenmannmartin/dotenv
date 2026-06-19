@@ -32,6 +32,18 @@ brew "fd"           # fast `find`; powers fzf (Ctrl-T/Alt-C) + nvim's picker
 brew "direnv"       # per-directory env; loads op:// secrets on cd (use_op helper)
 # (fzf-tab isn't packaged in brew — the installer clones it to ~/.local/share)
 
+# --- More dev tooling -----------------------------------------------------
+brew "jq"           # query/transform JSON (kubectl -o json, docker inspect, APIs)
+brew "yq"           # query/transform YAML (k8s manifests, helm values)
+brew "gh"           # GitHub CLI — PRs/issues/reviews (+ gh-dash extension)
+brew "git-absorb"   # auto-route fixup commits into the right history
+brew "mise"         # per-project tool versions (Go/Python/Node/Dart) + tasks
+brew "kubecolor"    # colorized kubectl (aliased to k / kubectl in ~/.zshrc)
+brew "dust"         # tree-style disk usage (du)
+brew "duf"          # friendly disk/mount table (df)
+brew "procs"        # modern process viewer (ps)
+brew "btop"         # system monitor (Catppuccin)
+
 # --- Container & Kubernetes investigation ---------------------------------
 # docker / docker compose / kubectl already come from OrbStack (above); these
 # add inspection UIs + helpers on top. Cheat-sheet in README.

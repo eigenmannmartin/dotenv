@@ -30,8 +30,10 @@ if have apt-get; then
   $SUDO apt-get update -qq || true
   $SUDO apt-get install -y -qq \
     zsh tmux git curl unzip ca-certificates fontconfig ripgrep fzf bat neovim \
-    python3 direnv nodejs \
+    python3 direnv nodejs jq btop \
     || echo "WARN: some apt packages failed to install"
+  # gh/yq/mise/kubecolor/git-absorb/dust/duf/procs vary by release — install via
+  # Homebrew-on-Linux or their upstream releases (macOS gets them from the Brewfile).
 
   # eza (modern ls) is only packaged in newer apt (Ubuntu 24.04+); install it
   # on its own so its absence can't block the batch above.
@@ -154,6 +156,12 @@ s = setk('logger', 'buffer', '50000', s)
 s = setk('logger', 'textWrap', 'true', s)
 open(p, 'w').write(s)
 PY
+fi
+
+# gh-dash: install the GitHub dashboard extension (idempotent; needs gh, no auth).
+if have gh; then
+  gh extension list 2>/dev/null | grep -q 'dlvhdr/gh-dash' \
+    || gh extension install dlvhdr/gh-dash >/dev/null 2>&1 || true
 fi
 
 echo "==> dotenv: package step done"
