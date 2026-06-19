@@ -4,12 +4,10 @@
 #   atuin login -u <user> -p <pass> -k <key>   # keep pass/key in 1Password
 #   atuin sync                                  # initial pull
 # The encryption key never leaves your machines; the server only stores ciphertext.
-#
-# >>> Set sync_address to your home atuin server (host:port). <<<
 auto_sync = true
 update_check = false
 sync_frequency = "5m"
-sync_address = "http://CHANGE-ME.home:8888"
+sync_address = "https://atuin.home.eigenmann.tech"
 
 # Search UI
 style = "compact"
