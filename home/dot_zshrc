@@ -50,7 +50,9 @@ autoload -Uz compinit
 compinit
 # End of Docker CLI completions
 export PATH=$PATH:/Users/martin/.runai/bin
-[ -x /Users/martin/.runai/bin/runai ] && source <(/Users/martin/.runai/bin/runai completion zsh)
+# runai prints "Failed to check for CLI updates." onto stdout, polluting the
+# sourced completion script; strip it so zsh doesn't try to run it as a command.
+[ -x /Users/martin/.runai/bin/runai ] && source <(/Users/martin/.runai/bin/runai completion zsh 2>/dev/null | grep -v 'Failed to check for CLI updates')
 
 # --- 1Password SSH agent (host only) --------------------------------------
 # Point SSH at the 1Password agent socket only when it exists, so that inside
@@ -61,8 +63,119 @@ unset _op_sock
 
 [ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
 
+# XDG: make lazygit & friends read ~/.config (macOS defaults elsewhere otherwise)
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+
 # --- atuin: better shell history (local only — no server sync) ------------
 command -v atuin >/dev/null && eval "$(atuin init zsh)"
+
+# --- Modern CLI replacements (guarded: no-op if the tool isn't installed) --
+# Colored `ls`: eza (icons + git) when installed, else native colored ls so
+# `ls` is colored by default everywhere (GNU `--color`, or BSD `-G` on macOS).
+if command -v eza >/dev/null; then
+  alias ls='eza --icons --group-directories-first --color=auto'
+  alias ll='eza -l  --icons --git --group-directories-first --color=auto'
+  alias la='eza -la --icons --git --group-directories-first --color=auto'
+  alias lt='eza --tree --level=2 --icons --color=auto'
+elif ls --version >/dev/null 2>&1; then   # GNU coreutils
+  alias ls='ls --color=auto'
+  alias ll='ls -lh  --color=auto'
+  alias la='ls -lAh --color=auto'
+else                                        # BSD ls (default on macOS)
+  export CLICOLOR=1
+  alias ls='ls -G'
+  alias ll='ls -lhG'
+  alias la='ls -lAhG'
+fi
+# bat → cat with syntax highlighting. Debian/Ubuntu ship the binary as `batcat`.
+# `--paging=never` keeps it cat-like; bat auto-drops decorations when piped.
+if command -v bat >/dev/null; then
+  export BAT_THEME="Catppuccin Macchiato"
+  alias cat='bat --style=plain --paging=never'
+elif command -v batcat >/dev/null; then
+  export BAT_THEME="Catppuccin Macchiato"
+  alias bat='batcat'
+  alias cat='batcat --style=plain --paging=never'
+fi
+
+# --- Key bindings ---------------------------------------------------------
+# Esc-Esc: toggle a leading `sudo` on the command line (on an empty line it
+# prefixes the PREVIOUS command). Bound in both emacs and vi-insert keymaps.
+_sudo_toggle() {
+  if [[ -z "$BUFFER" ]]; then
+    BUFFER="sudo $(fc -ln -1)"; CURSOR=$#BUFFER
+  elif [[ "$BUFFER" == sudo\ * ]]; then
+    BUFFER="${BUFFER#sudo }"; (( CURSOR -= 5 ))
+  else
+    BUFFER="sudo $BUFFER"; (( CURSOR += 5 ))
+  fi
+}
+zle -N _sudo_toggle
+bindkey -M emacs '\e\e' _sudo_toggle
+bindkey -M viins '\e\e' _sudo_toggle
+
+# --- zsh plugins & amenities (guarded; via brew / apt / clone) ------------
+_src() { local f; for f in "$@"; do [[ -r "$f" ]] && { source "$f"; return 0; }; done; return 1; }
+_zshare="${HOMEBREW_PREFIX:-/opt/homebrew}/share"
+# fzf: Ctrl-T (insert file), Alt-C (cd into subdir) + the fuzzy engine for fzf-tab
+command -v fzf >/dev/null && eval "$(fzf --zsh 2>/dev/null)"
+# fzf: Catppuccin Macchiato theme + bat/eza previews (Ctrl-T / Alt-C / zoxide zi)
+if command -v fzf >/dev/null; then
+  export FZF_DEFAULT_OPTS="\
+--height=40% --layout=reverse --border=none --info=inline-right \
+--color=bg+:#363a4f,bg:#24273a,spinner:#f4dbd6,hl:#ed8796 \
+--color=fg:#cad3f5,header:#ed8796,info:#c6a0f6,pointer:#f4dbd6 \
+--color=marker:#b7bdf8,fg+:#cad3f5,prompt:#c6a0f6,hl+:#ed8796 \
+--color=selected-bg:#494d64,border:#363a4f"
+  if command -v fd >/dev/null; then
+    export FZF_DEFAULT_COMMAND='fd --type f --hidden --follow --exclude .git'
+    export FZF_ALT_C_COMMAND='fd --type d --hidden --follow --exclude .git'
+  elif command -v fdfind >/dev/null; then
+    alias fd='fdfind'
+    export FZF_DEFAULT_COMMAND='fdfind --type f --hidden --follow --exclude .git'
+    export FZF_ALT_C_COMMAND='fdfind --type d --hidden --follow --exclude .git'
+  elif command -v rg >/dev/null; then
+    export FZF_DEFAULT_COMMAND='rg --files --hidden --glob !.git'
+  fi
+  export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
+  export FZF_CTRL_T_OPTS="--preview 'bat --color=always --style=numbers --line-range :300 {} 2>/dev/null || eza -la --color=always --icons=always {}'"
+  export FZF_ALT_C_OPTS="--preview 'eza --tree --level=2 --color=always --icons=always {} | head -200'"
+fi
+# fzf-tab: replace zsh's completion menu with an fzf picker (needs compinit first)
+_src "$HOME/.local/share/fzf-tab/fzf-tab.plugin.zsh"
+# fzf-tab: inherit the Catppuccin FZF_DEFAULT_OPTS (off by default) + bat/eza previews
+zstyle ':fzf-tab:*' use-fzf-default-opts yes
+zstyle ':fzf-tab:complete:cd:*' fzf-preview 'eza --tree --level=2 --color=always --icons=always $realpath 2>/dev/null'
+zstyle ':fzf-tab:complete:*:*' fzf-preview 'bat --color=always --style=plain --line-range :200 $realpath 2>/dev/null || eza -la --color=always --icons=always $realpath 2>/dev/null'
+# zoxide: smarter cd — `z <dir>` jumps by frecency, `zi` fuzzy-picks
+command -v zoxide >/dev/null && eval "$(zoxide init zsh)"
+# zsh-autosuggestions: greyed inline suggestion from history (→ to accept)
+_src "$_zshare/zsh-autosuggestions/zsh-autosuggestions.zsh" "$HOME/.local/share/zsh-autosuggestions/zsh-autosuggestions.zsh" /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+# fast-syntax-highlighting: command-line coloring — MUST be sourced last
+_src "$_zshare/zsh-fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh" "$HOME/.local/share/zsh-fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh" /usr/share/zsh-fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh
+unset _zshare
+# atuin owns Ctrl-R (fzf --zsh also binds it, so rebind after)
+command -v atuin >/dev/null && { bindkey '^r' atuin-search 2>/dev/null; bindkey -M viins '^r' atuin-search 2>/dev/null; }
+
+# direnv: per-directory env; loads op:// secrets on cd (see ~/.config/direnv/lib/use_op.sh)
+if command -v direnv >/dev/null; then
+  export DIRENV_LOG_FORMAT=$'\e[38;2;110;115;141m%s\e[0m'   # Catppuccin overlay0, dim
+  eval "$(direnv hook zsh)"
+fi
+
+# Colored man pages via bat
+command -v bat >/dev/null && export MANPAGER="sh -c 'col -bx | bat -l man -p'" MANROFFOPT='-c'
+
+# Handy git / nav aliases
+alias g='git' gs='git status -sb' gd='git diff' gl='git log --oneline -20' gco='git checkout' gp='git push' gpl='git pull'
+alias ..='cd ..' ...='cd ../..' ....='cd ../../..'
+
+# kitten ssh: push kitty terminfo + shell-integration + dotfiles to every remote
+# (fixes "unknown terminal xterm-kitty" / colorless prompts on k8s & cloud boxes).
+# No-ops outside a kitty-spawned shell (containers, Debian, plain terminals).
+if command -v kitten >/dev/null 2>&1 && [[ -n "$KITTY_WINDOW_ID" ]]; then
+  alias ssh='kitten ssh'
+fi
 
 # --- Auto-start tmux (interactive, top-level shells only) -----------------
 # Skips when: already in tmux, non-interactive, no tty, VS Code / JetBrains

@@ -1,0 +1,16 @@
+# lazygit — Catppuccin Macchiato, diffs via delta. Read from ~/.config/lazygit
+# (XDG_CONFIG_HOME is exported in .zshrc + kitty.conf so macOS honors it too).
+gui:
+  nerdFontsVersion: "3"
+  theme:
+    activeBorderColor: ["#8aadf4", bold] # blue
+    inactiveBorderColor: ["#6e738d"] # overlay0
+    selectedLineBgColor: ["#363a4f"] # surface0
+    unstagedChangesColor: ["#ed8796"] # red
+    defaultFgColor: ["#cad3f5"] # text
+git:
+  paging:
+    colorArg: always
+    # NOT side-by-side (lazygit panels are narrow); inherits Catppuccin + dark
+    # from the repo's global delta config.
+    pager: "delta --paging=never"

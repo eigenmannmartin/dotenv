@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Prefix-less fzf project switcher: pick a project under ~/code and
+# create-or-switch to a tmux session named after it. Pairs with the
+# per-project color bar (each session == one project). Bound to M-f.
+set -euo pipefail
+
+root="$HOME/code"
+[ -d "$root" ] || exit 0
+
+# Candidate projects: top-level dirs, plus one level into multi-repo parents.
+# Skip hidden dirs and common noise (.git/.venv/node_modules/runs/…).
+selected=$(
+  {
+    find "$root" -mindepth 1 -maxdepth 1 -type d ! -name '.*'
+    find "$root" -mindepth 2 -maxdepth 2 -type d ! -name '.*' \
+      ! -path '*/.*' \
+      ! -name node_modules ! -name .venv ! -name venv \
+      ! -name runs ! -name .git ! -name .github \
+      ! -name .devcontainer ! -name .ipynb_checkpoints
+  } 2>/dev/null | sort -u |
+  fzf --reverse --border=none --prompt='project > ' --height=100%
+) || exit 0
+[ -n "$selected" ] || exit 0
+
+# tmux uses '.' and ':' as target separators — collapse anything else to '_'.
+name=$(basename "$selected" | tr -c 'a-zA-Z0-9_-' '_')
+
+tmux has-session -t "=$name" 2>/dev/null \
+  || tmux new-session -ds "$name" -c "$selected"
+
+if [ -n "${TMUX:-}" ]; then
+  tmux switch-client -t "=$name"
+else
+  tmux attach -t "=$name"
+fi

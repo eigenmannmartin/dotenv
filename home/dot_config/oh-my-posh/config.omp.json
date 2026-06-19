@@ -13,27 +13,12 @@
       "segments": [
         {
           "type": "text",
-          "style": "diamond",
-          "leading_diamond": "",
-          "trailing_diamond": "",
-          "foreground": "#181926",
-          "background": "#6e738d",
-          "background_templates": [
+          "style": "plain",
+          "foreground": "#6e738d",
+          "foreground_templates": [
             "{{ if .Env.DOTENV_PROJECT_COLOR }}{{ .Env.DOTENV_PROJECT_COLOR }}{{ end }}"
           ],
-          "template": "{{ if .Env.DOTENV_PROJECT }} {{ .Env.DOTENV_PROJECT }} {{ end }}"
-        },
-        {
-          "foreground": "p:os",
-          "style": "plain",
-          "template": "{{.Icon}} ",
-          "type": "os"
-        },
-        {
-          "foreground": "p:blue",
-          "style": "plain",
-          "template": "{{ .UserName }}@{{ .HostName }} ",
-          "type": "session"
+          "template": "{{ if .Env.DOTENV_PROJECT }}▎ {{ end }}"
         },
         {
           "foreground": "p:pink",
@@ -48,11 +33,16 @@
         },
         {
           "foreground": "p:lavender",
+          "foreground_templates": [
+            "{{ if gt .Behind 0 }}#ED8796{{ end }}",
+            "{{ if or .Working.Changed .Staging.Changed }}#EED49F{{ end }}",
+            "{{ if gt .Ahead 0 }}#F5A97F{{ end }}"
+          ],
           "options": {
             "branch_icon": " ",
             "cherry_pick_icon": " ",
             "commit_icon": " ",
-            "fetch_status": false,
+            "fetch_status": true,
             "fetch_upstream_icon": false,
             "merge_icon": " ",
             "no_commits_icon": " ",
@@ -60,9 +50,22 @@
             "revert_icon": " ",
             "tag_icon": " "
           },
-          "template": "{{ .HEAD }} ",
+          "template": "{{ .HEAD }}{{ if gt .Ahead 0 }} ⇡{{ .Ahead }}{{ end }}{{ if gt .Behind 0 }} ⇣{{ .Behind }}{{ end }}{{ if .Working.Changed }} {{ .Working.String }}{{ end }}{{ if .Staging.Changed }} ✓{{ .Staging.String }}{{ end }} ",
           "style": "plain",
           "type": "git"
+        },
+        {
+          "type": "kubectl",
+          "style": "plain",
+          "foreground": "#8BD5CA",
+          "foreground_templates": [
+            "{{ if not (or (contains \"orbstack\" .Context) (contains \"docker-desktop\" .Context)) }}#F5A97F{{ end }}"
+          ],
+          "options": {
+            "parse_kubeconfig": true,
+            "display_error": false
+          },
+          "template": "{{ if .Context }}⎈ {{ .Context }}{{ if .Namespace }}:{{ .Namespace }}{{ end }} {{ end }}"
         },
         {
           "style": "plain",
@@ -72,8 +75,53 @@
         }
       ],
       "type": "prompt"
+    },
+    {
+      "type": "rprompt",
+      "overflow": "break",
+      "segments": [
+        {
+          "type": "status",
+          "style": "plain",
+          "foreground": "#A6DA95",
+          "foreground_templates": [
+            "{{ if gt .Code 0 }}#ED8796{{ end }}"
+          ],
+          "options": {
+            "always_enabled": true
+          },
+          "template": "{{ if gt .Code 0 }}✗ {{ .Code }}{{ else }}✓{{ end }}"
+        },
+        {
+          "type": "executiontime",
+          "style": "plain",
+          "foreground": "#6E738D",
+          "options": {
+            "threshold": 2000,
+            "style": "round"
+          },
+          "template": "  {{ .FormattedMs }}"
+        },
+        {
+          "type": "time",
+          "style": "plain",
+          "foreground": "#6E738D",
+          "options": {
+            "time_format": "15:04"
+          },
+          "template": "  {{ .CurrentDate | date .Format }}"
+        }
+      ]
     }
   ],
   "final_space": true,
-  "version": 4
+  "version": 4,
+  "transient_prompt": {
+    "foreground": "#A5ADCB",
+    "foreground_templates": [
+      "{{ if gt .Code 0 }}#ED8796{{ end }}"
+    ],
+    "background": "transparent",
+    "template": "❯ "
+  }
 }

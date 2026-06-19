@@ -29,8 +29,24 @@ if have apt-get; then
   export DEBIAN_FRONTEND=noninteractive
   $SUDO apt-get update -qq || true
   $SUDO apt-get install -y -qq \
-    zsh tmux git curl unzip ca-certificates fontconfig ripgrep fzf \
+    zsh tmux git curl unzip ca-certificates fontconfig ripgrep fzf bat neovim \
+    python3 direnv nodejs \
     || echo "WARN: some apt packages failed to install"
+
+  # eza (modern ls) is only packaged in newer apt (Ubuntu 24.04+); install it
+  # on its own so its absence can't block the batch above.
+  if ! have eza; then
+    $SUDO apt-get install -y -qq eza 2>/dev/null \
+      || echo "WARN: eza not in apt (Ubuntu 24.04+ only) — see https://eza.rocks"
+  fi
+  # zoxide (24.04+) and git-delta on their own so a miss can't block the batch.
+  have zoxide || $SUDO apt-get install -y -qq zoxide 2>/dev/null \
+    || echo "WARN: zoxide not in apt (24.04+) — see https://github.com/ajeetdsouza/zoxide"
+  have delta  || $SUDO apt-get install -y -qq git-delta 2>/dev/null \
+    || echo "WARN: git-delta not in apt — see https://dandavison.github.io/delta"
+  # fd (apt package fd-find; binary fdfind — zshrc aliases fd=fdfind).
+  have fd || have fdfind || $SUDO apt-get install -y -qq fd-find 2>/dev/null \
+    || echo "WARN: fd-find not in apt — see https://github.com/sharkdp/fd"
 else
   echo "WARN: apt-get not found; this installer targets Debian/Ubuntu."
 fi
@@ -47,6 +63,23 @@ if ! have oh-my-posh; then
   mkdir -p "$HOME/.local/bin"
   curl -s https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin" \
     || echo "WARN: oh-my-posh install failed"
+fi
+
+# lazygit — not in apt; pull the latest GitHub release tarball (-> ~/.local/bin)
+if ! have lazygit; then
+  echo "==> installing lazygit"
+  LG_VER="$(curl -fsSL https://api.github.com/repos/jesseduffield/lazygit/releases/latest \
+    | grep -oP '"tag_name": *"v\K[^"]+' || true)"
+  if [ -n "$LG_VER" ]; then
+    case "$(uname -m)" in x86_64) a=x86_64;; aarch64|arm64) a=arm64;; *) a="$(uname -m)";; esac
+    tmp="$(mktemp -d)"
+    if curl -fLso "$tmp/lg.tgz" \
+        "https://github.com/jesseduffield/lazygit/releases/download/v${LG_VER}/lazygit_${LG_VER}_Linux_${a}.tar.gz"; then
+      tar -xzf "$tmp/lg.tgz" -C "$tmp" lazygit \
+        && install -m755 "$tmp/lazygit" "$HOME/.local/bin/lazygit"
+    else echo "WARN: lazygit download failed"; fi
+    rm -rf "$tmp"
+  else echo "WARN: could not resolve lazygit version"; fi
 fi
 
 # Desktop-only (skipped in containers): kitty + FiraCode Nerd Font
@@ -75,5 +108,28 @@ fi
 {{ else -}}
 echo "WARN: unsupported OS '{{ .chezmoi.os }}' — install tmux/atuin/oh-my-posh manually."
 {{ end -}}
+
+# --- Shell plugins not in package managers: clone to ~/.local/share -------
+clone_plugin() {  # <repo-url> <dir-name>
+  local d="$HOME/.local/share/$2"
+  [ -d "$d" ] || git clone --depth 1 "$1" "$d" 2>/dev/null || echo "WARN: clone $2 failed"
+}
+clone_plugin https://github.com/Aloxaf/fzf-tab fzf-tab
+{{ if eq .chezmoi.os "linux" -}}
+# On macOS these come from Homebrew; on Linux clone them (apt's are older/absent).
+clone_plugin https://github.com/zsh-users/zsh-autosuggestions zsh-autosuggestions
+clone_plugin https://github.com/zdharma-continuum/fast-syntax-highlighting zsh-fast-syntax-highlighting
+{{ end -}}
+
+# --- git-delta as the git pager (idempotent; only if delta + git present) -
+if have delta && have git; then
+  git config --global core.pager "delta"
+  git config --global interactive.diffFilter "delta --color-only"
+  git config --global delta.navigate true
+  git config --global delta.line-numbers true
+  git config --global delta.dark true
+  git config --global delta.syntax-theme "Catppuccin Macchiato"
+  git config --global merge.conflictStyle zdiff3
+fi
 
 echo "==> dotenv: package step done"
