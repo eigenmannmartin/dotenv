@@ -7,3 +7,7 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$P
 
 # Added by `rbenv init` on Sat Jan 31 16:38:40 CET 2026
 command -v rbenv >/dev/null && eval "$(rbenv init - --no-rehash zsh)"
+
+# OrbStack: docker/kubectl CLI + integration (host only; guarded so machines
+# without OrbStack no-op cleanly).
+[ -f "$HOME/.orbstack/shell/init.zsh" ] && source "$HOME/.orbstack/shell/init.zsh" 2>/dev/null || :

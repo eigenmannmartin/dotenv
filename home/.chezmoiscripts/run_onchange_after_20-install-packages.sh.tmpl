@@ -17,6 +17,20 @@ is_container() {
 if have brew; then
   # --no-upgrade: install only what's missing; don't churn already-installed tools.
   brew bundle --no-upgrade --file "{{ .chezmoi.workingTree }}/Brewfile" || echo "WARN: brew bundle had failures"
+
+  # Prune broken zsh completion symlinks in Homebrew's site-functions dir. The
+  # Docker Desktop cask rename (docker -> docker-desktop) orphaned _docker and
+  # _docker-compose links pointing into a Caskroom path that no longer exists,
+  # which makes `compinit` error on every shell start. `find -L ... -type l`
+  # matches only symlinks whose target is missing (because -L follows the link),
+  # so this removes dead links and never the valid ones. docker completion is
+  # preserved: a real ~/.docker/completions/_docker is first on fpath (zshrc).
+  _bsf="$(brew --prefix 2>/dev/null)/share/zsh/site-functions"
+  if [ -d "$_bsf" ]; then
+    find -L "$_bsf" -maxdepth 1 -type l -delete 2>/dev/null \
+      && echo "==> pruned broken zsh completion symlinks in $_bsf"
+  fi
+  unset _bsf
 else
   echo "WARN: Homebrew not found — install from https://brew.sh and re-run 'chezmoi apply'."
 fi

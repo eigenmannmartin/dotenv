@@ -98,6 +98,11 @@ elif command -v batcat >/dev/null; then
   alias cat='batcat --style=plain --paging=never'
 fi
 
+# ctop uses the old termbox library, which panics ("unsupported terminal") on
+# modern $TERM values like xterm-kitty (kitty) or tmux-256color (inside tmux).
+# Force a TERM it recognizes — scoped to the command, harmless elsewhere.
+command -v ctop >/dev/null && alias ctop='TERM=xterm-256color ctop'
+
 # --- Key bindings ---------------------------------------------------------
 # Esc-Esc: toggle a leading `sudo` on the command line (on an empty line it
 # prefixes the PREVIOUS command). Bound in both emacs and vi-insert keymaps.
@@ -156,6 +161,31 @@ _src "$_zshare/zsh-fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh"
 unset _zshare
 # atuin owns Ctrl-R (fzf --zsh also binds it, so rebind after)
 command -v atuin >/dev/null && { bindkey '^r' atuin-search 2>/dev/null; bindkey -M viins '^r' atuin-search 2>/dev/null; }
+
+# Tab: accept the greyed-out autosuggestion if one is showing; otherwise fall
+# through to normal (fzf-tab) completion. Must be bound AFTER fzf-tab +
+# zsh-autosuggestions load so both widgets exist.
+_tab_accept_or_complete() {
+  if [[ -n "$POSTDISPLAY" ]]; then
+    zle autosuggest-accept
+  elif zle -l fzf-tab-complete; then
+    zle fzf-tab-complete
+  else
+    zle expand-or-complete
+  fi
+}
+zle -N _tab_accept_or_complete
+bindkey '^I' _tab_accept_or_complete
+bindkey -M viins '^I' _tab_accept_or_complete
+
+# Ctrl-C fix: with oh-my-posh transient_prompt enabled, the line-finish hook
+# swallows the redraw on SIGINT, so Ctrl-C *looks* like it does nothing. This
+# restores the clean abort + fresh prompt. Only affects the line editor —
+# running foreground programs still get Ctrl-C from the tty.
+TRAPINT() {
+  zle && zle reset-prompt
+  return $(( 128 + $1 ))
+}
 
 # direnv: per-directory env; loads op:// secrets on cd (see ~/.config/direnv/lib/use_op.sh)
 if command -v direnv >/dev/null; then
