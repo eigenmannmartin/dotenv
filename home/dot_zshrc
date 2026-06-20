@@ -24,6 +24,7 @@ _dotenv_project_badge() {
   [[ "$PWD/" == "$root"/* ]] && proj="${${PWD#$root/}%%/*}"
   if [[ -z "$proj" ]]; then
     unset DOTENV_PROJECT DOTENV_PROJECT_COLOR
+    [[ -n "$TMUX" ]] && { tmux set -u @dotenv_project_color; tmux set -u @dotenv_project_initial } 2>/dev/null
     return
   fi
   export DOTENV_PROJECT="$proj"
@@ -34,6 +35,10 @@ _dotenv_project_badge() {
     for (( i=1; i<=${#proj}; i++ )); do c=$proj[i]; sum=$(( (sum * 31 + #c) % 100000007 )); done
     export DOTENV_PROJECT_COLOR="${DOTENV_PROJECT_PALETTE[$(( sum % ${#DOTENV_PROJECT_PALETTE} + 1 ))]}"
   fi
+  # Mirror the project into tmux (session-scoped, since one session == one
+  # project) so the always-visible status badge AND the active window indicator
+  # match the prompt: project color + capital first initial.
+  [[ -n "$TMUX" ]] && { tmux set @dotenv_project_color "$DOTENV_PROJECT_COLOR"; tmux set @dotenv_project_initial "${(U)proj[1,1]}" } 2>/dev/null
 }
 autoload -Uz add-zsh-hook
 add-zsh-hook chpwd _dotenv_project_badge
