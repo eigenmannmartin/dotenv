@@ -1,17 +1,7 @@
 #!/usr/bin/env bash
 # direnv stdlib extension — auto-sourced from ~/.config/direnv/lib/*.sh
-#
-# use_op [OP_ACCOUNT=<acct>] NAME=op://vault/item/field ...
-#   Resolves 1Password secret references at directory entry via the `op` CLI.
-#   Put refs (not secrets) in a project .envrc, then `direnv allow`:
-#     use_op OP_ACCOUNT=my.1password.eu \
-#            RUNAI_TOKEN=op://Work/runai/token \
-#            OPENAI_API_KEY=op://Work/openai/credential
-#   cd in  -> Touch ID -> vars exported; cd out -> unset. Nothing secret on disk.
-#   No-op (dim notice) when `op` is absent, so containers stay clean.
-#   Note: this machine has multiple 1Password accounts, so set OP_ACCOUNT
-#   (or pin it inline: op://<account>/vault/item/field). Run `direnv reload`
-#   after rotating a secret (direnv caches until .envrc changes).
+# use_op [OP_ACCOUNT=<acct>] NAME=op://vault/item/field ... — export 1Password refs on cd in, unset on cd out.
+# Set OP_ACCOUNT (multiple accounts on this machine); run `direnv reload` after rotating a secret (direnv caches until .envrc changes).
 use_op() {
   if ! has op; then
     log_status "op CLI not found — skipping secrets"

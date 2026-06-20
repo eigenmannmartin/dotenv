@@ -1,4 +1,4 @@
-# gh-dash — PR/issue dashboard (run: `gh dash`). Catppuccin Macchiato, blue accent.
+# Usage: `gh dash`.
 prSections:
   - title: My PRs
     filters: is:open author:@me

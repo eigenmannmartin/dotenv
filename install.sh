@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# dotenv bootstrap — installs chezmoi (if needed) and applies this repo.
-# Safe to re-run. Used as the entrypoint for VS Code dotfiles.installCommand
-# and GitHub Codespaces "Automatically install dotfiles".
+# dotenv bootstrap: installs chezmoi if needed and applies this repo. Safe to re-run; entrypoint for VS Code/Codespaces dotfiles install.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,7 +15,7 @@ if ! command -v chezmoi >/dev/null 2>&1; then
   fi
 fi
 
-# Apply the dotfiles from this repo (chezmoi reads .chezmoiroot -> home/).
+# .chezmoiroot points chezmoi at home/
 chezmoi init --apply --source "$REPO_DIR"
 
 echo "dotenv: applied. Dependencies are installed automatically by chezmoi"

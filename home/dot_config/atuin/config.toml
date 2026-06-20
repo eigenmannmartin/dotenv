@@ -1,15 +1,10 @@
-# atuin — sync shell history to the self-hosted server on the home network.
-#
-# One-time per machine (after `chezmoi apply`):
-#   atuin login -u <user> -p <pass> -k <key>   # keep pass/key in 1Password
-#   atuin sync                                  # initial pull
-# The encryption key never leaves your machines; the server only stores ciphertext.
+# atuin — login once per machine: `atuin login -u <user> -p <pass> -k <key>` then `atuin sync` (creds in 1Password)
+# Encryption key never leaves your machines; server stores only ciphertext.
 auto_sync = true
 update_check = false
 sync_frequency = "5m"
 sync_address = "https://atuin.home.eigenmann.tech"
 
-# Search UI
 style = "compact"
 inline_height = 25
 

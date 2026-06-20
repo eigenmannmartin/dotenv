@@ -1,21 +1,10 @@
 # ~/.config/k9s/plugins.yaml  (k9s v0.51) — chezmoi-tracked as home/dot_config/k9s/plugins.yaml
-# Conventions:
-#   * $CONTEXT is threaded into every command (multi-cluster: bechterew/hpc/private).
-#   * Read/display plugins run foreground (background:false) and page through `less -R`
-#     or `bat --paging=always`; press q to return to k9s.
-#   * Interactive/streaming plugins (stern -f, kubectl edit/exec/debug, dive) run
-#     foreground and own the TTY until they exit.
-#   * Destructive actions set confirm:true + dangerous:true.
-#   * containers scope: $NAME is the container, $POD is the pod, $COL-IMAGE is the image
-#     (verified against derailed/k9s plugins/debug-container.yaml and dive.yaml).
-#     pods/other scope: $NAME is the resource. $RESOURCE_NAME is the lowercase plural kind.
-#   * Input vars are referenced as $INPUT_<UPPERCASE_NAME>; valid input types are
-#     string/number/bool/dropdown; when a default is set, required must be true.
-# Shortcut policy: Shift-<letter> / Ctrl-<letter>, never k9s built-ins. Shift-N/A/S/O are
-# reserved table sort keys; Shift-F/J and Shift-C/L (log view) are reserved — all avoided.
+# $CONTEXT threaded into every command (clusters: bechterew/hpc/private).
+# containers scope: $NAME=container, $POD=pod, $COL-IMAGE=image; other scopes: $NAME=resource, $RESOURCE_NAME=lowercase plural kind.
+# Inputs: $INPUT_<UPPERCASE_NAME>; if a default is set, required must be true.
+# Avoid k9s built-ins: Shift-N/A/S/O are table sort keys; Shift-F/J and Shift-C/L (log view) reserved.
 plugins:
 
-  # ---- Logs (stern multi-pod) ------------------------------------------------
   stern-pods:
     shortCut: Ctrl-Y
     description: Stern follow (filter)
@@ -62,7 +51,6 @@ plugins:
       - -c
       - 'stern --context $CONTEXT -n $NAMESPACE --tail 500 --no-follow --container-state terminated $FILTER 2>&1 | less -R'
 
-  # ---- Inspect (read-only, paged) -------------------------------------------
   describe-pager:
     shortCut: Shift-D
     description: Describe (pager)
@@ -111,7 +99,6 @@ plugins:
       - -c
       - 'kubectl get secret $NAME -n $NAMESPACE --context $CONTEXT -o json | jq -r ".data | to_entries[] | \"\(.key): \(.value | @base64d)\"" | less -R'
 
-  # ---- Usage / top ----------------------------------------------------------
   top-pods:
     shortCut: Shift-T
     description: top pods --containers (by mem), paged
@@ -136,7 +123,6 @@ plugins:
       - -c
       - 'kubectl top node --context $CONTEXT --sort-by=cpu | less -R'
 
-  # ---- Container-level: exec, ephemeral debug, dive -------------------------
   exec-shell:
     shortCut: Shift-K
     description: Exec selected container (bash|sh)
@@ -196,7 +182,6 @@ plugins:
       - -c
       - 'kubectl debug node/$NAME -it --context $CONTEXT --image=nicolaka/netshoot:latest -- sh'
 
-  # ---- Rollout ops (deploy/sts/ds) -----------------------------------------
   rollout-restart:
     shortCut: Shift-R
     description: Rollout restart
@@ -276,7 +261,6 @@ plugins:
       - --context
       - $CONTEXT
 
-  # ---- Node maintenance -----------------------------------------------------
   node-cordon:
     shortCut: Shift-W
     description: Cordon node
@@ -325,7 +309,6 @@ plugins:
       - -c
       - 'kubectl drain $NAME --context $CONTEXT --ignore-daemonsets --delete-emptydir-data --grace-period=${INPUT_GRACE:-30} --timeout=5m; echo DONE; read -n1'
 
-  # ---- Helm -----------------------------------------------------------------
   helm-values:
     shortCut: Shift-V
     description: Helm user values | bat
@@ -375,4 +358,3 @@ plugins:
       - --wait
       - --timeout
       - 5m
-

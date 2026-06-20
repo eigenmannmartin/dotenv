@@ -1,4 +1,3 @@
-# --- oh-my-posh prompt (Catppuccin Macchiato + per-project badge) ---------
 if command -v oh-my-posh >/dev/null; then
   _omp_cfg="$HOME/.config/oh-my-posh/config.omp.json"
   if [[ -r "$_omp_cfg" ]]; then
@@ -9,9 +8,6 @@ if command -v oh-my-posh >/dev/null; then
   unset _omp_cfg
 fi
 
-# --- per-project color badge (sets env vars the prompt segment reads) ------
-# Folders under ~/code get a colored badge in the prompt: pinned colors first,
-# otherwise a stable color auto-derived from the project name.
 typeset -gA DOTENV_PROJECT_COLOR_MAP=(
   hsg        '#a6da95'   # green
   bechterew  '#8aadf4'   # blue
@@ -35,9 +31,7 @@ _dotenv_project_badge() {
     for (( i=1; i<=${#proj}; i++ )); do c=$proj[i]; sum=$(( (sum * 31 + #c) % 100000007 )); done
     export DOTENV_PROJECT_COLOR="${DOTENV_PROJECT_PALETTE[$(( sum % ${#DOTENV_PROJECT_PALETTE} + 1 ))]}"
   fi
-  # Mirror the project into tmux (session-scoped, since one session == one
-  # project) so the always-visible status badge AND the active window indicator
-  # match the prompt: project color + capital first initial.
+  # Mirror project into tmux (session-scoped: one session == one project) so status badge matches the prompt.
   [[ -n "$TMUX" ]] && { tmux set @dotenv_project_color "$DOTENV_PROJECT_COLOR"; tmux set @dotenv_project_initial "${(U)proj[1,1]}" } 2>/dev/null
 }
 autoload -Uz add-zsh-hook
@@ -55,13 +49,10 @@ autoload -Uz compinit
 compinit
 # End of Docker CLI completions
 export PATH=$PATH:/Users/martin/.runai/bin
-# runai prints "Failed to check for CLI updates." onto stdout, polluting the
-# sourced completion script; strip it so zsh doesn't try to run it as a command.
+# runai prints "Failed to check for CLI updates." onto stdout, polluting the sourced completion; strip it.
 [ -x /Users/martin/.runai/bin/runai ] && source <(/Users/martin/.runai/bin/runai completion zsh 2>/dev/null | grep -v 'Failed to check for CLI updates')
 
-# --- 1Password SSH agent (host only) --------------------------------------
-# Point SSH at the 1Password agent socket only when it exists, so that inside
-# devcontainers/Codespaces the auto-forwarded SSH_AUTH_SOCK is left untouched.
+# Use 1Password agent only when its socket exists, so devcontainer/Codespaces forwarded SSH_AUTH_SOCK is left alone.
 _op_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
 [ -S "$_op_sock" ] && export SSH_AUTH_SOCK="$_op_sock"
 unset _op_sock
@@ -71,12 +62,8 @@ unset _op_sock
 # XDG: make lazygit & friends read ~/.config (macOS defaults elsewhere otherwise)
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 
-# --- atuin: better shell history (local only — no server sync) ------------
 command -v atuin >/dev/null && eval "$(atuin init zsh)"
 
-# --- Modern CLI replacements (guarded: no-op if the tool isn't installed) --
-# Colored `ls`: eza (icons + git) when installed, else native colored ls so
-# `ls` is colored by default everywhere (GNU `--color`, or BSD `-G` on macOS).
 if command -v eza >/dev/null; then
   alias ls='eza --icons --group-directories-first --color=auto'
   alias ll='eza -l  --icons --git --group-directories-first --color=auto'
@@ -92,8 +79,7 @@ else                                        # BSD ls (default on macOS)
   alias ll='ls -lhG'
   alias la='ls -lAhG'
 fi
-# bat → cat with syntax highlighting. Debian/Ubuntu ship the binary as `batcat`.
-# `--paging=never` keeps it cat-like; bat auto-drops decorations when piped.
+# Debian/Ubuntu ship bat as `batcat`.
 if command -v bat >/dev/null; then
   export BAT_THEME="Catppuccin Macchiato"
   alias cat='bat --style=plain --paging=never'
@@ -103,14 +89,10 @@ elif command -v batcat >/dev/null; then
   alias cat='batcat --style=plain --paging=never'
 fi
 
-# ctop uses the old termbox library, which panics ("unsupported terminal") on
-# modern $TERM values like xterm-kitty (kitty) or tmux-256color (inside tmux).
-# Force a TERM it recognizes — scoped to the command, harmless elsewhere.
+# ctop's termbox panics on TERM like xterm-kitty/tmux-256color; force a recognized TERM.
 command -v ctop >/dev/null && alias ctop='TERM=xterm-256color ctop'
 
-# --- Key bindings ---------------------------------------------------------
-# Esc-Esc: toggle a leading `sudo` on the command line (on an empty line it
-# prefixes the PREVIOUS command). Bound in both emacs and vi-insert keymaps.
+# Esc-Esc toggles leading `sudo` (on empty line, prefixes previous command).
 _sudo_toggle() {
   if [[ -z "$BUFFER" ]]; then
     BUFFER="sudo $(fc -ln -1)"; CURSOR=$#BUFFER
@@ -124,12 +106,9 @@ zle -N _sudo_toggle
 bindkey -M emacs '\e\e' _sudo_toggle
 bindkey -M viins '\e\e' _sudo_toggle
 
-# --- zsh plugins & amenities (guarded; via brew / apt / clone) ------------
 _src() { local f; for f in "$@"; do [[ -r "$f" ]] && { source "$f"; return 0; }; done; return 1; }
 _zshare="${HOMEBREW_PREFIX:-/opt/homebrew}/share"
-# fzf: Ctrl-T (insert file), Alt-C (cd into subdir) + the fuzzy engine for fzf-tab
 command -v fzf >/dev/null && eval "$(fzf --zsh 2>/dev/null)"
-# fzf: Catppuccin Macchiato theme + bat/eza previews (Ctrl-T / Alt-C / zoxide zi)
 if command -v fzf >/dev/null; then
   export FZF_DEFAULT_OPTS="\
 --height=40% --layout=reverse --border=none --info=inline-right \
@@ -151,25 +130,20 @@ if command -v fzf >/dev/null; then
   export FZF_CTRL_T_OPTS="--preview 'bat --color=always --style=numbers --line-range :300 {} 2>/dev/null || eza -la --color=always --icons=always {}'"
   export FZF_ALT_C_OPTS="--preview 'eza --tree --level=2 --color=always --icons=always {} | head -200'"
 fi
-# fzf-tab: replace zsh's completion menu with an fzf picker (needs compinit first)
+# fzf-tab needs compinit first.
 _src "$HOME/.local/share/fzf-tab/fzf-tab.plugin.zsh"
-# fzf-tab: inherit the Catppuccin FZF_DEFAULT_OPTS (off by default) + bat/eza previews
 zstyle ':fzf-tab:*' use-fzf-default-opts yes
 zstyle ':fzf-tab:complete:cd:*' fzf-preview 'eza --tree --level=2 --color=always --icons=always $realpath 2>/dev/null'
 zstyle ':fzf-tab:complete:*:*' fzf-preview 'bat --color=always --style=plain --line-range :200 $realpath 2>/dev/null || eza -la --color=always --icons=always $realpath 2>/dev/null'
-# zoxide: smarter cd — `z <dir>` jumps by frecency, `zi` fuzzy-picks
 command -v zoxide >/dev/null && eval "$(zoxide init zsh)"
-# zsh-autosuggestions: greyed inline suggestion from history (→ to accept)
 _src "$_zshare/zsh-autosuggestions/zsh-autosuggestions.zsh" "$HOME/.local/share/zsh-autosuggestions/zsh-autosuggestions.zsh" /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
-# fast-syntax-highlighting: command-line coloring — MUST be sourced last
+# fast-syntax-highlighting MUST be sourced last.
 _src "$_zshare/zsh-fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh" "$HOME/.local/share/zsh-fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh" /usr/share/zsh-fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh
 unset _zshare
-# atuin owns Ctrl-R (fzf --zsh also binds it, so rebind after)
+# fzf --zsh also binds Ctrl-R, so rebind atuin after.
 command -v atuin >/dev/null && { bindkey '^r' atuin-search 2>/dev/null; bindkey -M viins '^r' atuin-search 2>/dev/null; }
 
-# Tab: accept the greyed-out autosuggestion if one is showing; otherwise fall
-# through to normal (fzf-tab) completion. Must be bound AFTER fzf-tab +
-# zsh-autosuggestions load so both widgets exist.
+# Tab accepts the autosuggestion if showing, else falls through to fzf-tab; bind AFTER both widgets load.
 _tab_accept_or_complete() {
   if [[ -n "$POSTDISPLAY" ]]; then
     zle autosuggest-accept
@@ -183,10 +157,7 @@ zle -N _tab_accept_or_complete
 bindkey '^I' _tab_accept_or_complete
 bindkey -M viins '^I' _tab_accept_or_complete
 
-# Ctrl-C fix: with oh-my-posh transient_prompt enabled, the line-finish hook
-# swallows the redraw on SIGINT, so Ctrl-C *looks* like it does nothing. This
-# restores the clean abort + fresh prompt. Only affects the line editor —
-# running foreground programs still get Ctrl-C from the tty.
+# With oh-my-posh transient_prompt, the line-finish hook swallows the SIGINT redraw; restore clean abort + fresh prompt.
 TRAPINT() {
   zle && zle reset-prompt
   return $(( 128 + $1 ))
@@ -198,10 +169,8 @@ if command -v direnv >/dev/null; then
   eval "$(direnv hook zsh)"
 fi
 
-# mise: per-project tool versions (Go/Python/Node/Dart) + tasks — activates on cd
 command -v mise >/dev/null && eval "$(mise activate zsh)"
 
-# kubectl: kubecolor wrapper (colorized) + `k` shorthand + completion
 if command -v kubectl >/dev/null; then
   source <(kubectl completion zsh) 2>/dev/null
   if command -v kubecolor >/dev/null; then
@@ -213,10 +182,9 @@ if command -v kubectl >/dev/null; then
   compdef k=kubectl 2>/dev/null
 fi
 
-# gh-dash: GitHub PR/issue dashboard (`ghd`)
 command -v gh >/dev/null && alias ghd='gh dash'
 
-# git worktree helper: gwt <branch> -> linked worktree in a sibling dir (+ cd into it)
+# gwt <branch> -> linked worktree in a sibling dir (+ cd into it)
 gwt() {
   local top br dir
   top=$(git rev-parse --show-toplevel 2>/dev/null) || { print -u2 "gwt: not in a git repo"; return 1; }
@@ -232,25 +200,17 @@ gwt-rm() {  # gwt-rm <branch>: remove the worktree created by gwt
   [[ -n "$main" ]] && git worktree remove "${main}.${br//\//-}"
 }
 
-# Colored man pages via bat
 command -v bat >/dev/null && export MANPAGER="sh -c 'col -bx | bat -l man -p'" MANROFFOPT='-c'
 
-# Handy git / nav aliases
 alias g='git' gs='git status -sb' gd='git diff' gl='git log --oneline -20' gco='git checkout' gp='git push' gpl='git pull'
 alias ..='cd ..' ...='cd ../..' ....='cd ../../..'
 
-# kitten ssh: push kitty terminfo + shell-integration + dotfiles to every remote
-# (fixes "unknown terminal xterm-kitty" / colorless prompts on k8s & cloud boxes).
-# No-ops outside a kitty-spawned shell (containers, Debian, plain terminals).
+# kitten ssh pushes kitty terminfo to remotes (fixes "unknown terminal xterm-kitty"); only inside a kitty shell.
 if command -v kitten >/dev/null 2>&1 && [[ -n "$KITTY_WINDOW_ID" ]]; then
   alias ssh='kitten ssh'
 fi
 
-# --- Auto-start tmux (interactive, top-level shells only) -----------------
-# Skips when: already in tmux, non-interactive, no tty, VS Code / JetBrains
-# terminals, devcontainers / Codespaces (Docker + Podman), or CI.
-# Disable per-shell with TMUX_AUTOSTART=0.  Non-exec on purpose: if ~/.tmux.conf
-# is broken the login shell still survives.
+# Auto-start tmux for interactive top-level shells; non-exec so a broken ~/.tmux.conf doesn't kill the login shell. Disable with TMUX_AUTOSTART=0.
 if [[ -z "$TMUX" && -o interactive && -t 1 \
       && "${TMUX_AUTOSTART:-1}" != "0" \
       && "$TERM_PROGRAM" != "vscode" \

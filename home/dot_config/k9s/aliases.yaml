@@ -1,8 +1,5 @@
-# ~/.config/k9s/aliases.yaml  (k9s v0.51) — chezmoi-tracked as home/dot_config/k9s/aliases.yaml
-# Existing 8 entries preserved verbatim; additions use GVR form (disambiguates across
-# API groups for the multi-cluster bechterew/hpc/private setup) plus a command-filter jump.
+# GVR form disambiguates across API groups for the multi-cluster bechterew/hpc/private setup.
 aliases:
-  # --- existing (preserved) ---
   dp: deployments
   sec: v1/secrets
   jo: jobs
@@ -11,7 +8,6 @@ aliases:
   ro: roles
   rb: rolebindings
   np: networkpolicies
-  # --- added: common workloads / GVR form ---
   ds: apps/v1/daemonsets
   ss: apps/v1/statefulsets
   rs: apps/v1/replicasets
@@ -22,6 +18,4 @@ aliases:
   hpa: autoscaling/v2/horizontalpodautoscalers
   cj: batch/v1/cronjobs
   ev: v1/events
-  # --- command + namespace jump ---
   sys: pods kube-system
-

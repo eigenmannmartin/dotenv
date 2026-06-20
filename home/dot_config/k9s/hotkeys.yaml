@@ -1,8 +1,4 @@
-# ~/.config/k9s/hotkeys.yaml  (k9s v0.51) — chezmoi-tracked as home/dot_config/k9s/hotkeys.yaml
-# Global fast-jumps on Shift-<digit> — the conflict-free hotkey space (k9s's own
-# docs use Shift-0). Letters are deliberately left to k9s built-in sort keys
-# (Shift-N/A/C/M/…) and to the scoped plugins. keepHistory:true so <Esc> returns
-# to the previous view.
+# Shift-<digit> = conflict-free hotkey space; letters left to k9s built-in sort keys & plugins.
 hotKeys:
   jump-pods:
     shortCut: Shift-0

@@ -1,5 +1,4 @@
 # lazygit — Catppuccin Macchiato, diffs via delta. Read from ~/.config/lazygit
-# (XDG_CONFIG_HOME is exported in .zshrc + kitty.conf so macOS honors it too).
 gui:
   nerdFontsVersion: "3"
   theme:
@@ -11,6 +10,5 @@ gui:
 git:
   paging:
     colorArg: always
-    # NOT side-by-side (lazygit panels are narrow); inherits Catppuccin + dark
-    # from the repo's global delta config.
+    # NOT side-by-side: lazygit panels are narrow
     pager: "delta --paging=never"

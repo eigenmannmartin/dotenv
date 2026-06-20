@@ -1,13 +1,11 @@
 
-# Ensure ~/.local/bin (chezmoi / atuin / oh-my-posh installers land here) is on PATH.
+# Ensure ~/.local/bin is on PATH.
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
 
-# Homebrew (host only — guarded so a Linux container without it no-ops).
+# Guarded so a Linux container without Homebrew no-ops.
 [ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"
 
-# Added by `rbenv init` on Sat Jan 31 16:38:40 CET 2026
 command -v rbenv >/dev/null && eval "$(rbenv init - --no-rehash zsh)"
 
-# OrbStack: docker/kubectl CLI + integration (host only; guarded so machines
-# without OrbStack no-op cleanly).
+# Guarded so machines without OrbStack no-op cleanly.
 [ -f "$HOME/.orbstack/shell/init.zsh" ] && source "$HOME/.orbstack/shell/init.zsh" 2>/dev/null || :

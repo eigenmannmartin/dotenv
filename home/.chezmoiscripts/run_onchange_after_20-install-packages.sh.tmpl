@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# dotenv: install runtime dependencies. Runs on `chezmoi apply` whenever this
-# script changes. Idempotent and self-gating (skips GUI bits in containers).
+# dotenv: install runtime packages on `chezmoi apply`; idempotent, self-gating in containers.
 set -uo pipefail
 
 echo "==> dotenv: installing packages ({{ .chezmoi.os }})"
@@ -13,18 +12,11 @@ is_container() {
 }
 
 {{ if eq .chezmoi.os "darwin" -}}
-# ----------------------------- macOS (Homebrew) ---------------------------
 if have brew; then
   # --no-upgrade: install only what's missing; don't churn already-installed tools.
   brew bundle --no-upgrade --file "{{ .chezmoi.workingTree }}/Brewfile" || echo "WARN: brew bundle had failures"
 
-  # Prune broken zsh completion symlinks in Homebrew's site-functions dir. The
-  # Docker Desktop cask rename (docker -> docker-desktop) orphaned _docker and
-  # _docker-compose links pointing into a Caskroom path that no longer exists,
-  # which makes `compinit` error on every shell start. `find -L ... -type l`
-  # matches only symlinks whose target is missing (because -L follows the link),
-  # so this removes dead links and never the valid ones. docker completion is
-  # preserved: a real ~/.docker/completions/_docker is first on fpath (zshrc).
+  # Prune broken zsh completion symlinks (Docker cask rename orphaned _docker links) so compinit doesn't error; -L follows links so only dead ones match.
   _bsf="$(brew --prefix 2>/dev/null)/share/zsh/site-functions"
   if [ -d "$_bsf" ]; then
     find -L "$_bsf" -maxdepth 1 -type l -delete 2>/dev/null \
@@ -36,7 +28,6 @@ else
 fi
 
 {{ else if eq .chezmoi.os "linux" -}}
-# --------------------------- Linux (Debian/Ubuntu) ------------------------
 SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
 
 if have apt-get; then
@@ -46,34 +37,30 @@ if have apt-get; then
     zsh tmux git curl unzip ca-certificates fontconfig ripgrep fzf bat neovim \
     python3 direnv nodejs jq btop \
     || echo "WARN: some apt packages failed to install"
-  # gh/yq/mise/kubecolor/git-absorb/dust/duf/procs vary by release — install via
-  # Homebrew-on-Linux or their upstream releases (macOS gets them from the Brewfile).
+  # gh/yq/mise/kubecolor/git-absorb/dust/duf/procs vary by release — install via Homebrew-on-Linux or upstream releases.
 
-  # eza (modern ls) is only packaged in newer apt (Ubuntu 24.04+); install it
-  # on its own so its absence can't block the batch above.
+  # Install eza/zoxide/delta/fd separately so a per-tool miss can't block the batch above.
   if ! have eza; then
     $SUDO apt-get install -y -qq eza 2>/dev/null \
       || echo "WARN: eza not in apt (Ubuntu 24.04+ only) — see https://eza.rocks"
   fi
-  # zoxide (24.04+) and git-delta on their own so a miss can't block the batch.
   have zoxide || $SUDO apt-get install -y -qq zoxide 2>/dev/null \
     || echo "WARN: zoxide not in apt (24.04+) — see https://github.com/ajeetdsouza/zoxide"
   have delta  || $SUDO apt-get install -y -qq git-delta 2>/dev/null \
     || echo "WARN: git-delta not in apt — see https://dandavison.github.io/delta"
-  # fd (apt package fd-find; binary fdfind — zshrc aliases fd=fdfind).
+  # fd: apt package fd-find ships binary fdfind — zshrc aliases fd=fdfind.
   have fd || have fdfind || $SUDO apt-get install -y -qq fd-find 2>/dev/null \
     || echo "WARN: fd-find not in apt — see https://github.com/sharkdp/fd"
 else
   echo "WARN: apt-get not found; this installer targets Debian/Ubuntu."
 fi
 
-# atuin — not reliably packaged in apt; use the official installer (-> ~/.local/bin)
+# atuin — not reliably packaged in apt; official installer (-> ~/.local/bin)
 if ! have atuin; then
   echo "==> installing atuin"
   curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh || echo "WARN: atuin install failed"
 fi
 
-# oh-my-posh — official installer (-> ~/.local/bin)
 if ! have oh-my-posh; then
   echo "==> installing oh-my-posh"
   mkdir -p "$HOME/.local/bin"
@@ -81,7 +68,7 @@ if ! have oh-my-posh; then
     || echo "WARN: oh-my-posh install failed"
 fi
 
-# lazygit — not in apt; pull the latest GitHub release tarball (-> ~/.local/bin)
+# lazygit — not in apt; pull latest GitHub release tarball (-> ~/.local/bin)
 if ! have lazygit; then
   echo "==> installing lazygit"
   LG_VER="$(curl -fsSL https://api.github.com/repos/jesseduffield/lazygit/releases/latest \
@@ -125,7 +112,7 @@ fi
 echo "WARN: unsupported OS '{{ .chezmoi.os }}' — install tmux/atuin/oh-my-posh manually."
 {{ end -}}
 
-# --- Shell plugins not in package managers: clone to ~/.local/share -------
+# Shell plugins not in package managers: clone to ~/.local/share
 clone_plugin() {  # <repo-url> <dir-name>
   local d="$HOME/.local/share/$2"
   [ -d "$d" ] || git clone --depth 1 "$1" "$d" 2>/dev/null || echo "WARN: clone $2 failed"
@@ -137,7 +124,6 @@ clone_plugin https://github.com/zsh-users/zsh-autosuggestions zsh-autosuggestion
 clone_plugin https://github.com/zdharma-continuum/fast-syntax-highlighting zsh-fast-syntax-highlighting
 {{ end -}}
 
-# --- git-delta as the git pager (idempotent; only if delta + git present) -
 if have delta && have git; then
   git config --global core.pager "delta"
   git config --global interactive.diffFilter "delta --color-only"
@@ -148,11 +134,7 @@ if have delta && have git; then
   git config --global merge.conflictStyle zdiff3
 fi
 
-# k9s: the skin + plugins/hotkeys/aliases/views are chezmoi-tracked under
-# ~/.config/k9s. config.yaml is k9s-managed (machine paths + rewritten on exit),
-# so we patch only our preference keys in place, idempotently, once k9s has
-# written one. Prefer yq for robust nested edits; fall back to a minimal python
-# patch (skin + logger). No-op if k9s or its config.yaml is absent.
+# k9s config.yaml is k9s-managed (rewritten on exit), so patch only our preference keys in place once it exists; yq preferred, python fallback.
 if have k9s; then
   _k9s_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/k9s/config.yaml"
   if [ -f "$_k9s_cfg" ] && have yq; then
@@ -191,14 +173,12 @@ PY
   fi
 fi
 
-# gh-dash: install the GitHub dashboard extension (idempotent; needs gh, no auth).
 if have gh; then
   gh extension list 2>/dev/null | grep -q 'dlvhdr/gh-dash' \
     || gh extension install dlvhdr/gh-dash >/dev/null 2>&1 || true
 fi
 
-# Dev Containers CLI (build / up / exec devcontainers from the terminal). npm global;
-# needs node (Brewfile / apt nodejs). Tolerant — Linux may need a writable npm prefix.
+# Dev Containers CLI via npm global; Linux may need a writable npm prefix.
 if have npm && ! have devcontainer; then
   npm install -g @devcontainers/cli >/dev/null 2>&1 \
     || echo "WARN: devcontainer CLI install failed (npm -g; set a user npm prefix on Linux)"

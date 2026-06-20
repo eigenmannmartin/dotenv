@@ -1,7 +1,4 @@
-# ~/.config/k9s/views.yaml  (k9s v0.51) — chezmoi-tracked as home/dot_config/k9s/views.yaml
-# Columns are plain strings; naming a normally-WIDE column (NODE, IP) forces it visible.
-# Column names with non-alpha chars (%CPU/R, %MEM/R) MUST be quoted (k9s requires columns
-# to be valid YAML strings). View keys use GVR form.
+# Column names with non-alpha chars (%CPU/R, %MEM/R) must be quoted.
 views:
   v1/pods:
     columns:
@@ -53,4 +50,3 @@ views:
       - "%MEM"
       - AGE
     sortColumn: NAME:asc
-

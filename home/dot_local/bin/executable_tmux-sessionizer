@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
-# Prefix-less fzf project switcher: pick a project under ~/code and
-# create-or-switch to a tmux session named after it. Pairs with the
-# per-project color bar (each session == one project). Bound to M-f.
+# Prefix-less fzf project switcher: pick a ~/code project, create-or-switch a tmux session named after it. Bound to M-f.
 set -euo pipefail
 
 root="$HOME/code"
 [ -d "$root" ] || exit 0
 
-# Candidate projects: top-level dirs, plus one level into multi-repo parents.
-# Skip hidden dirs and common noise (.git/.venv/node_modules/runs/…).
 selected=$(
   {
     find "$root" -mindepth 1 -maxdepth 1 -type d ! -name '.*'
