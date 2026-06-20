@@ -148,13 +148,31 @@ if have delta && have git; then
   git config --global merge.conflictStyle zdiff3
 fi
 
-# k9s: ship the (blue-accented) Catppuccin Macchiato skin via ~/.config/k9s/skins
-# and patch our prefs — blue skin + full logs — into k9s's own config once it has
-# written one. config.yaml is k9s-managed (+ machine paths) so we patch in place,
-# idempotently, rather than tracking it. No-op if k9s/config is absent.
+# k9s: the skin + plugins/hotkeys/aliases/views are chezmoi-tracked under
+# ~/.config/k9s. config.yaml is k9s-managed (machine paths + rewritten on exit),
+# so we patch only our preference keys in place, idempotently, once k9s has
+# written one. Prefer yq for robust nested edits; fall back to a minimal python
+# patch (skin + logger). No-op if k9s or its config.yaml is absent.
 if have k9s; then
   _k9s_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/k9s/config.yaml"
-  [ -f "$_k9s_cfg" ] && python3 - "$_k9s_cfg" <<'PY' 2>/dev/null || true
+  if [ -f "$_k9s_cfg" ] && have yq; then
+    yq -i '
+      .k9s.ui.skin = "catppuccin-macchiato" |
+      .k9s.ui.reactive = true |
+      .k9s.ui.enableMouse = true |
+      .k9s.liveViewAutoRefresh = true |
+      .k9s.skipLatestRevCheck = true |
+      .k9s.maxConnRetry = 15 |
+      .k9s.shellPod.image = "nicolaka/netshoot:latest" |
+      .k9s.logger.tail = 5000 |
+      .k9s.logger.buffer = 50000 |
+      .k9s.logger.textWrap = true |
+      .k9s.logger.showTime = true
+    ' "$_k9s_cfg" 2>/dev/null \
+      && echo "==> patched k9s config.yaml (skin + reactive UI + logger + netshoot shellPod)" \
+      || echo "WARN: k9s config.yaml patch (yq) failed"
+  elif [ -f "$_k9s_cfg" ]; then
+    python3 - "$_k9s_cfg" <<'PY' 2>/dev/null || true
 import sys, re
 p = sys.argv[1]; s = open(p).read()
 def setk(block, key, val, s):
@@ -170,6 +188,7 @@ s = setk('logger', 'buffer', '50000', s)
 s = setk('logger', 'textWrap', 'true', s)
 open(p, 'w').write(s)
 PY
+  fi
 fi
 
 # gh-dash: install the GitHub dashboard extension (idempotent; needs gh, no auth).

@@ -1,0 +1,56 @@
+# ~/.config/k9s/hotkeys.yaml  (k9s v0.51) — chezmoi-tracked as home/dot_config/k9s/hotkeys.yaml
+# Global fast-jumps on Shift-<digit> — the conflict-free hotkey space (k9s's own
+# docs use Shift-0). Letters are deliberately left to k9s built-in sort keys
+# (Shift-N/A/C/M/…) and to the scoped plugins. keepHistory:true so <Esc> returns
+# to the previous view.
+hotKeys:
+  jump-pods:
+    shortCut: Shift-0
+    description: Pods (all namespaces)
+    command: pods -A
+    keepHistory: true
+  jump-deployments:
+    shortCut: Shift-1
+    description: Deployments (all namespaces)
+    command: deploy -A
+    keepHistory: true
+  jump-services:
+    shortCut: Shift-2
+    description: Services
+    command: svc
+    keepHistory: true
+  jump-ingress:
+    shortCut: Shift-3
+    description: Ingresses
+    command: ing
+    keepHistory: true
+  jump-nodes:
+    shortCut: Shift-4
+    description: Nodes
+    command: nodes
+    keepHistory: true
+  jump-configmaps:
+    shortCut: Shift-5
+    description: ConfigMaps
+    command: cm
+    keepHistory: true
+  jump-secrets:
+    shortCut: Shift-6
+    description: Secrets
+    command: sec
+    keepHistory: true
+  jump-events:
+    shortCut: Shift-7
+    description: Events (all namespaces)
+    command: events -A
+    keepHistory: true
+  jump-jobs:
+    shortCut: Shift-8
+    description: Jobs
+    command: jo
+    keepHistory: true
+  jump-hpa:
+    shortCut: Shift-9
+    description: HorizontalPodAutoscalers
+    command: hpa
+    keepHistory: true

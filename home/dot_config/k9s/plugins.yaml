@@ -1,0 +1,378 @@
+# ~/.config/k9s/plugins.yaml  (k9s v0.51) — chezmoi-tracked as home/dot_config/k9s/plugins.yaml
+# Conventions:
+#   * $CONTEXT is threaded into every command (multi-cluster: bechterew/hpc/private).
+#   * Read/display plugins run foreground (background:false) and page through `less -R`
+#     or `bat --paging=always`; press q to return to k9s.
+#   * Interactive/streaming plugins (stern -f, kubectl edit/exec/debug, dive) run
+#     foreground and own the TTY until they exit.
+#   * Destructive actions set confirm:true + dangerous:true.
+#   * containers scope: $NAME is the container, $POD is the pod, $COL-IMAGE is the image
+#     (verified against derailed/k9s plugins/debug-container.yaml and dive.yaml).
+#     pods/other scope: $NAME is the resource. $RESOURCE_NAME is the lowercase plural kind.
+#   * Input vars are referenced as $INPUT_<UPPERCASE_NAME>; valid input types are
+#     string/number/bool/dropdown; when a default is set, required must be true.
+# Shortcut policy: Shift-<letter> / Ctrl-<letter>, never k9s built-ins. Shift-N/A/S/O are
+# reserved table sort keys; Shift-F/J and Shift-C/L (log view) are reserved — all avoided.
+plugins:
+
+  # ---- Logs (stern multi-pod) ------------------------------------------------
+  stern-pods:
+    shortCut: Ctrl-Y
+    description: Stern follow (filter)
+    scopes:
+      - pods
+    command: stern
+    background: false
+    confirm: false
+    args:
+      - --context
+      - $CONTEXT
+      - -n
+      - $NAMESPACE
+      - --tail
+      - "200"
+      - --color
+      - always
+      - --timestamps
+      - $FILTER
+
+  stern-workload:
+    shortCut: Ctrl-Y
+    description: Stern follow all pods of workload
+    scopes:
+      - deployments
+      - statefulsets
+      - daemonsets
+    command: sh
+    background: false
+    confirm: false
+    args:
+      - -c
+      - 'sel=$(kubectl get $RESOURCE_NAME $NAME -n $NAMESPACE --context $CONTEXT -o json | jq -r ".spec.selector.matchLabels | to_entries | map(\"\(.key)=\(.value)\") | join(\",\")"); stern --context $CONTEXT -n $NAMESPACE --selector "$sel" --since 1h --tail 200 --color always --timestamps'
+
+  stern-previous:
+    shortCut: Shift-L
+    description: Stern previous (crashed) logs, paged
+    scopes:
+      - pods
+    command: sh
+    background: false
+    confirm: false
+    args:
+      - -c
+      - 'stern --context $CONTEXT -n $NAMESPACE --tail 500 --no-follow --container-state terminated $FILTER 2>&1 | less -R'
+
+  # ---- Inspect (read-only, paged) -------------------------------------------
+  describe-pager:
+    shortCut: Shift-D
+    description: Describe (pager)
+    scopes:
+      - all
+    command: sh
+    background: false
+    confirm: false
+    args:
+      - -c
+      - 'kubectl describe $RESOURCE_NAME $NAME -n $NAMESPACE --context $CONTEXT | less -R'
+
+  yaml-pager:
+    shortCut: Shift-Y
+    description: YAML (clean) | bat
+    scopes:
+      - all
+    command: sh
+    background: false
+    confirm: false
+    args:
+      - -c
+      - 'kubectl get $RESOURCE_NAME $NAME -n $NAMESPACE --context $CONTEXT -o yaml | yq "del(.metadata.managedFields)" | bat -l yaml --paging=always --style=plain'
+
+  events-object:
+    shortCut: Shift-E
+    description: Events for object (chrono), paged
+    scopes:
+      - all
+    command: sh
+    background: false
+    confirm: false
+    args:
+      - -c
+      - 'kubectl get events --context $CONTEXT -n $NAMESPACE --field-selector involvedObject.name=$NAME --sort-by=.lastTimestamp | less -R'
+
+  decode-secret:
+    shortCut: Shift-X
+    description: Decode secret | pager
+    scopes:
+      - secrets
+    command: sh
+    background: false
+    confirm: false
+    args:
+      - -c
+      - 'kubectl get secret $NAME -n $NAMESPACE --context $CONTEXT -o json | jq -r ".data | to_entries[] | \"\(.key): \(.value | @base64d)\"" | less -R'
+
+  # ---- Usage / top ----------------------------------------------------------
+  top-pods:
+    shortCut: Shift-T
+    description: top pods --containers (by mem), paged
+    scopes:
+      - pods
+    command: sh
+    background: false
+    confirm: false
+    args:
+      - -c
+      - 'kubectl top pod --context $CONTEXT -n $NAMESPACE --containers --sort-by=memory | less -R'
+
+  top-nodes:
+    shortCut: Shift-T
+    description: top nodes (by cpu), paged
+    scopes:
+      - nodes
+    command: sh
+    background: false
+    confirm: false
+    args:
+      - -c
+      - 'kubectl top node --context $CONTEXT --sort-by=cpu | less -R'
+
+  # ---- Container-level: exec, ephemeral debug, dive -------------------------
+  exec-shell:
+    shortCut: Shift-K
+    description: Exec selected container (bash|sh)
+    scopes:
+      - containers
+    command: sh
+    background: false
+    confirm: false
+    args:
+      - -c
+      - 'kubectl exec -it $POD -c $NAME --context $CONTEXT -n $NAMESPACE -- sh -c "command -v bash >/dev/null && exec bash || exec sh"'
+
+  ephemeral-debug:
+    shortCut: Shift-G
+    description: Ephemeral debug container (netshoot)
+    scopes:
+      - containers
+    command: kubectl
+    background: false
+    confirm: true
+    dangerous: true
+    args:
+      - debug
+      - -it
+      - --context
+      - $CONTEXT
+      - -n
+      - $NAMESPACE
+      - $POD
+      - --target=$NAME
+      - --image=nicolaka/netshoot:latest
+      - --profile=sysadmin
+      - --
+      - sh
+
+  dive-image:
+    shortCut: Shift-I
+    description: Dive image layers
+    scopes:
+      - containers
+    command: dive
+    background: false
+    confirm: false
+    args:
+      - $COL-IMAGE
+
+  node-debug:
+    shortCut: Shift-G
+    description: Node root shell (kubectl debug)
+    scopes:
+      - nodes
+    command: sh
+    background: false
+    confirm: true
+    dangerous: true
+    args:
+      - -c
+      - 'kubectl debug node/$NAME -it --context $CONTEXT --image=nicolaka/netshoot:latest -- sh'
+
+  # ---- Rollout ops (deploy/sts/ds) -----------------------------------------
+  rollout-restart:
+    shortCut: Shift-R
+    description: Rollout restart
+    scopes:
+      - deployments
+      - statefulsets
+      - daemonsets
+    command: kubectl
+    background: true
+    confirm: true
+    dangerous: true
+    args:
+      - rollout
+      - restart
+      - $RESOURCE_NAME/$NAME
+      - -n
+      - $NAMESPACE
+      - --context
+      - $CONTEXT
+
+  rollout-undo:
+    shortCut: Shift-U
+    description: Rollout undo (to revision)
+    scopes:
+      - deployments
+      - statefulsets
+      - daemonsets
+    command: bash
+    background: false
+    confirm: true
+    dangerous: true
+    inputs:
+      - name: rev
+        label: Revision (blank = previous)
+        type: string
+        required: false
+    args:
+      - -c
+      - 'kubectl rollout undo $RESOURCE_NAME/$NAME -n $NAMESPACE --context $CONTEXT ${INPUT_REV:+--to-revision=$INPUT_REV} && echo DONE; read -n1'
+
+  rollout-history:
+    shortCut: Shift-H
+    description: Rollout history, paged
+    scopes:
+      - deployments
+      - statefulsets
+      - daemonsets
+    command: sh
+    background: false
+    confirm: false
+    args:
+      - -c
+      - 'kubectl rollout history $RESOURCE_NAME/$NAME -n $NAMESPACE --context $CONTEXT | less -R'
+
+  scale-replicas:
+    shortCut: Shift-Z
+    description: Scale replicas
+    scopes:
+      - deployments
+      - statefulsets
+      - replicasets
+    command: kubectl
+    background: true
+    confirm: true
+    dangerous: true
+    inputs:
+      - name: replicas
+        label: Target replica count
+        type: number
+        required: true
+    args:
+      - scale
+      - $RESOURCE_NAME/$NAME
+      - --replicas=$INPUT_REPLICAS
+      - -n
+      - $NAMESPACE
+      - --context
+      - $CONTEXT
+
+  # ---- Node maintenance -----------------------------------------------------
+  node-cordon:
+    shortCut: Shift-W
+    description: Cordon node
+    scopes:
+      - nodes
+    command: kubectl
+    background: true
+    confirm: true
+    dangerous: true
+    args:
+      - cordon
+      - $NAME
+      - --context
+      - $CONTEXT
+
+  node-uncordon:
+    shortCut: Shift-U
+    description: Uncordon node
+    scopes:
+      - nodes
+    command: kubectl
+    background: true
+    confirm: true
+    args:
+      - uncordon
+      - $NAME
+      - --context
+      - $CONTEXT
+
+  node-drain:
+    shortCut: Shift-R
+    description: Drain node (evict pods)
+    scopes:
+      - nodes
+    command: bash
+    background: false
+    confirm: true
+    dangerous: true
+    inputs:
+      - name: grace
+        label: Grace period seconds
+        type: number
+        required: true
+        default: "30"
+    args:
+      - -c
+      - 'kubectl drain $NAME --context $CONTEXT --ignore-daemonsets --delete-emptydir-data --grace-period=${INPUT_GRACE:-30} --timeout=5m; echo DONE; read -n1'
+
+  # ---- Helm -----------------------------------------------------------------
+  helm-values:
+    shortCut: Shift-V
+    description: Helm user values | bat
+    scopes:
+      - helm
+    command: sh
+    background: false
+    confirm: false
+    args:
+      - -c
+      - 'helm get values $COL-NAME -n $NAMESPACE --kube-context $CONTEXT | bat -l yaml --paging=always --style=plain'
+
+  helm-history:
+    shortCut: Shift-H
+    description: Helm history, paged
+    scopes:
+      - helm
+    command: sh
+    background: false
+    confirm: false
+    args:
+      - -c
+      - 'helm history $COL-NAME -n $NAMESPACE --kube-context $CONTEXT --max 50 | less -R'
+
+  helm-rollback:
+    shortCut: Shift-B
+    description: Helm rollback (to revision)
+    scopes:
+      - helm
+    command: helm
+    background: false
+    confirm: true
+    dangerous: true
+    inputs:
+      - name: rev
+        label: Revision to roll back to
+        type: number
+        required: true
+    args:
+      - rollback
+      - $COL-NAME
+      - $INPUT_REV
+      - -n
+      - $NAMESPACE
+      - --kube-context
+      - $CONTEXT
+      - --wait
+      - --timeout
+      - 5m
+

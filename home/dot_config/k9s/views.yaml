@@ -1,0 +1,56 @@
+# ~/.config/k9s/views.yaml  (k9s v0.51) — chezmoi-tracked as home/dot_config/k9s/views.yaml
+# Columns are plain strings; naming a normally-WIDE column (NODE, IP) forces it visible.
+# Column names with non-alpha chars (%CPU/R, %MEM/R) MUST be quoted (k9s requires columns
+# to be valid YAML strings). View keys use GVR form.
+views:
+  v1/pods:
+    columns:
+      - NAMESPACE
+      - NAME
+      - READY
+      - STATUS
+      - RESTARTS
+      - "%CPU/R"
+      - "%MEM/R"
+      - IP
+      - NODE
+      - AGE
+    sortColumn: AGE:asc
+  apps/v1/deployments:
+    columns:
+      - NAMESPACE
+      - NAME
+      - READY
+      - UP-TO-DATE
+      - AVAILABLE
+      - AGE
+    sortColumn: NAME:asc
+  apps/v1/statefulsets:
+    columns:
+      - NAMESPACE
+      - NAME
+      - READY
+      - AGE
+    sortColumn: NAME:asc
+  v1/services:
+    columns:
+      - NAMESPACE
+      - NAME
+      - TYPE
+      - CLUSTER-IP
+      - EXTERNAL-IP
+      - PORTS
+      - AGE
+    sortColumn: NAME:asc
+  v1/nodes:
+    columns:
+      - NAME
+      - STATUS
+      - ROLE
+      - TAINTS
+      - VERSION
+      - "%CPU"
+      - "%MEM"
+      - AGE
+    sortColumn: NAME:asc
+
