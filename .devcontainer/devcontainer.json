@@ -1,0 +1,31 @@
+// Devcontainer where Claude (running on the HOST) executes this repo's git + build/test commands,
+// via the `dx` wrapper (~/.local/bin/dx) -> `devcontainer exec`.
+//
+// Commit signing + SSH push reuse your HOST 1Password agent, forwarded by OrbStack/Docker Desktop at
+// /run/host-services/ssh-auth.sock (verified working on OrbStack). No key or token ever enters the
+// container. Signing still triggers a 1Password approval popup on the host, so run commits/pushes in
+// the FOREGROUND (the backgrounded popup gets no click and signing fails).
+//
+// This is also the template to copy into other repos: keep the `mounts`/`SSH_AUTH_SOCK`/signing wiring,
+// swap the image/features and the postCreate setup for that project's toolchain.
+{
+  "name": "dotenv",
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm",
+
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  // Forward the host SSH agent (1Password) into the container for signing + push auth.
+  "mounts": [
+    "source=/run/host-services/ssh-auth.sock,target=/ssh-agent,type=bind"
+  ],
+  "containerEnv": {
+    "SSH_AUTH_SOCK": "/ssh-agent"
+  },
+
+  // Apply the dotfiles + wire git signing/push to the forwarded agent. Runs once on create.
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+
+  "remoteUser": "vscode"
+}

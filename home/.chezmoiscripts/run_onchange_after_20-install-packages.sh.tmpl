@@ -135,13 +135,15 @@ if have delta && have git; then
 fi
 
 # k9s config.yaml is k9s-managed (rewritten on exit), so patch only our preference keys in place once it exists; yq preferred, python fallback.
+# enableMouse=false on purpose: with it on, k9s grabs the mouse and its reactive refresh wipes any selection — you can't copy.
+# Off, a drag falls through to tmux copy-mode (a frozen snapshot tmux-yank copies cleanly); read/copy structured output via the Shift-D/Y/X/E pager plugins.
 if have k9s; then
   _k9s_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/k9s/config.yaml"
   if [ -f "$_k9s_cfg" ] && have yq; then
     yq -i '
       .k9s.ui.skin = "catppuccin-macchiato" |
       .k9s.ui.reactive = true |
-      .k9s.ui.enableMouse = true |
+      .k9s.ui.enableMouse = false |
       .k9s.liveViewAutoRefresh = true |
       .k9s.skipLatestRevCheck = true |
       .k9s.maxConnRetry = 15 |

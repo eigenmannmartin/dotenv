@@ -20,7 +20,7 @@ sh -c "$(curl -fsLS https://get.chezmoi.io)" -- init --apply git@github.com:eige
 
 chezmoi reads [`.chezmoiroot`](.chezmoiroot) and treats [`home/`](home) as the
 source state (`dot_zshrc` → `~/.zshrc`, etc.). Repo-meta files at the root
-(`README.md`, `install.sh`, the yubikey artifacts, `git/`) are *not* applied to
+(`README.md`, `install.sh`, `.devcontainer/`, `git/`) are *not* applied to
 `$HOME`.
 
 ## What's managed today
@@ -114,9 +114,35 @@ Container & Kubernetes inspection (macOS via [`Brewfile`](Brewfile); `docker`,
 Set `sync_address` in [`atuin/config.toml`](home/dot_config/atuin/config.toml), then
 once per machine: `atuin login -u <user> -k <key>` (key/pass in 1Password) + `atuin sync`.
 
-**Dev Containers** — the [`devcontainer`](https://github.com/devcontainers/cli) CLI is
-installed (`devcontainer up` / `exec` / `build` from the terminal). VS Code can also
-bootstrap this setup automatically: set `"dotfiles.repository": "eigenmannmartin/dotenv"`
+## Dev Containers
+
+The [`devcontainer`](https://github.com/devcontainers/cli) CLI is installed, and this
+repo ships a [`.devcontainer/`](.devcontainer) so an agent (e.g. Claude Code) running
+**on the host** can run a repo's `git`/build/test commands **inside a container** —
+with commit signing and push that still go through your **host 1Password agent**, no
+key or token ever entering the container.
+
+How it works:
+
+- The container forwards the host SSH agent at `/run/host-services/ssh-auth.sock`
+  (OrbStack / Docker Desktop), exposed as `SSH_AUTH_SOCK`. macOS-only `op-ssh-sign`
+  is absent, so git's default `ssh-keygen` signer signs **through the forwarded
+  agent**; [`.devcontainer/setup.sh`](.devcontainer/setup.sh) wires
+  `gpg.format=ssh` + selects your *Github Key* out of the agent.
+- From the host, run repo commands through the **`dx`** wrapper
+  ([`~/.local/bin/dx`](home/dot_local/bin/executable_dx)): `dx git commit -m …`,
+  `dx git push`, `dx npm test`. It brings the container up on first use and
+  `devcontainer exec`s into it.
+- **Run signing commands in the foreground.** Signing/push pop a 1Password approval
+  on the host; a backgrounded `dx git commit` gets no click and signing fails.
+  (This is the "1Password for both" choice — autonomous-but-for-one-approval, not
+  fully hands-off. A dedicated offline signing key would remove the popup; not used,
+  to keep everything on the 1Password key.)
+- **Other repos:** copy this `.devcontainer/` as a template — keep the agent mount +
+  signing wiring, swap the image/features + `postCreate` for that project's toolchain.
+
+VS Code can also bootstrap the dotfiles inside any container: set
+`"dotfiles.repository": "eigenmannmartin/dotenv"`
 (+ `"dotfiles.installCommand": "install.sh"`) in your VS Code settings; the host-only
 bits skip themselves inside containers.
 
@@ -136,8 +162,9 @@ live in `lua/plugins/` (e.g.
 ## Host-only vs container-safe
 
 - **Host-only** (ignored in containers via [`home/.chezmoiignore`](home/.chezmoiignore)):
-  `kitty` config; the yubikey udev rule + `clean-card-private-keys` (udev is a
-  host kernel facility); the 1Password `IdentityAgent` / `op-ssh-sign` signer.
+  the `kitty` config (a desktop GUI terminal). The macOS-only 1Password
+  `op-ssh-sign` signer is also host-only — containers fall back to signing
+  through the forwarded host SSH agent (see [Dev Containers](#dev-containers)).
 - **Container-safe**: zsh, tmux, vim, git config. External tools are
   `command -v`-guarded so a barebones image no-ops cleanly. The bridge into a
   container is **terminfo + the forwarded host SSH agent** — keys never enter
@@ -149,12 +176,6 @@ live in `lua/plugins/` (e.g.
   agent wins inside containers).
 - Commit signing uses `gpg.format = ssh` + 1Password's `op-ssh-sign` (see
   [`git/1password-signing.gitconfig`](git/1password-signing.gitconfig)).
-
-## YubiKey GPG cleanup (Linux host only)
-
-[`40-yubikey.rules`](40-yubikey.rules) + [`clean-card-private-keys`](clean-card-private-keys)
-scrub GPG card key-stubs on (re)insert. These install to `/etc/udev/rules.d`
-and `/usr/local/bin` on a real Linux host only.
 
 ## Dependencies & platforms
 
@@ -185,5 +206,4 @@ you may still want `chsh -s "$(which zsh)"` to make zsh your login shell.
 
 - More aliases / abbreviations (e.g. zsh-abbr)
 - Portable `~/.vimrc` (plain `vim` fallback; Neovim/LazyVim already wired)
-- zsh history tuning + fast `compinit`
-- devcontainer: privileged yubikey install as a chezmoi `run_onchange_` script (CLI + `dotfiles.repository` are done)
+- zsh history tuning (fast `compinit -C` available — see the note in `dot_zshrc`)

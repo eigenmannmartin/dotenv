@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# dx — run a command inside the current repo's devcontainer (Claude stays on the host; git/build/test
+# run in the container, where commit signing + push go through the forwarded host 1Password agent).
+#
+#   dx git commit -m "msg"     # signs via 1Password (approve the popup) — run in the FOREGROUND
+#   dx git push                # SSH push via the forwarded 1Password agent
+#   dx npm test                # or any project dependency available in the container
+#
+# Brings the container up on first use. Repos need a .devcontainer/ (copy dotenv's as a template).
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "dx: not inside a git repo" >&2; exit 1; }
+[ -e "$root/.devcontainer" ] || { echo "dx: no .devcontainer/ in $root — copy dotenv's as a template" >&2; exit 1; }
+command -v devcontainer >/dev/null || { echo "dx: devcontainer CLI missing (npm i -g @devcontainers/cli)" >&2; exit 1; }
+
+if [ -z "$(docker ps -q -f "label=devcontainer.local_folder=$root" 2>/dev/null)" ]; then
+  echo "dx: starting devcontainer for $root …" >&2
+  devcontainer up --workspace-folder "$root" >&2
+fi
+
+exec devcontainer exec --workspace-folder "$root" -- "$@"

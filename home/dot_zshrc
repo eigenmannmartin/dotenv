@@ -20,7 +20,7 @@ _dotenv_project_badge() {
   [[ "$PWD/" == "$root"/* ]] && proj="${${PWD#$root/}%%/*}"
   if [[ -z "$proj" ]]; then
     unset DOTENV_PROJECT DOTENV_PROJECT_COLOR
-    [[ -n "$TMUX" ]] && { tmux set -u @dotenv_project_color; tmux set -u @dotenv_project_initial } 2>/dev/null
+    [[ -n "$TMUX" ]] && { tmux set -uw -t "$TMUX_PANE" @dotenv_project_color; tmux set -uw -t "$TMUX_PANE" @dotenv_project_initial } 2>/dev/null
     return
   fi
   export DOTENV_PROJECT="$proj"
@@ -31,8 +31,9 @@ _dotenv_project_badge() {
     for (( i=1; i<=${#proj}; i++ )); do c=$proj[i]; sum=$(( (sum * 31 + #c) % 100000007 )); done
     export DOTENV_PROJECT_COLOR="${DOTENV_PROJECT_PALETTE[$(( sum % ${#DOTENV_PROJECT_PALETTE} + 1 ))]}"
   fi
-  # Mirror project into tmux (session-scoped: one session == one project) so status badge matches the prompt.
-  [[ -n "$TMUX" ]] && { tmux set @dotenv_project_color "$DOTENV_PROJECT_COLOR"; tmux set @dotenv_project_initial "${(U)proj[1,1]}" } 2>/dev/null
+  # Mirror project into tmux as WINDOW options (-w, keyed to this pane's window) so each window keeps
+  # its own badge and switching windows re-resolves the color/initial against the active window.
+  [[ -n "$TMUX" ]] && { tmux set -w -t "$TMUX_PANE" @dotenv_project_color "$DOTENV_PROJECT_COLOR"; tmux set -w -t "$TMUX_PANE" @dotenv_project_initial "${(U)proj[1,1]}" } 2>/dev/null
 }
 autoload -Uz add-zsh-hook
 add-zsh-hook chpwd _dotenv_project_badge
@@ -45,9 +46,12 @@ export PATH="$PATH:/Users/martin/flutter/bin"
 
 # The following lines have been added by Docker Desktop to enable Docker CLI completions.
 fpath=(/Users/martin/.docker/completions $fpath)
-autoload -Uz compinit
-compinit
 # End of Docker CLI completions
+
+# Initialize completions once — after all fpath edits, before the compdef/fzf-tab setup below.
+# (Hoisted out of the Docker block so removing that vendor block can't silently break completion.)
+# ponytail: plain compinit; switch to `compinit -C` to skip the slow security audit if startup drags.
+autoload -Uz compinit && compinit
 export PATH=$PATH:/Users/martin/.runai/bin
 # runai prints "Failed to check for CLI updates." onto stdout, polluting the sourced completion; strip it.
 [ -x /Users/martin/.runai/bin/runai ] && source <(/Users/martin/.runai/bin/runai completion zsh 2>/dev/null | grep -v 'Failed to check for CLI updates')
@@ -205,8 +209,10 @@ command -v bat >/dev/null && export MANPAGER="sh -c 'col -bx | bat -l man -p'" M
 alias g='git' gs='git status -sb' gd='git diff' gl='git log --oneline -20' gco='git checkout' gp='git push' gpl='git pull'
 alias ..='cd ..' ...='cd ../..' ....='cd ../../..'
 
-# kitten ssh pushes kitty terminfo to remotes (fixes "unknown terminal xterm-kitty"); only inside a kitty shell.
-if command -v kitten >/dev/null 2>&1 && [[ -n "$KITTY_WINDOW_ID" ]]; then
+# kitten ssh pushes kitty terminfo to remotes (fixes "unknown terminal xterm-kitty"), but only in a bare
+# kitty shell. NOT inside tmux: the ssh kitten can't complete its handshake through tmux, so it dumps the
+# KITTY_DATA blob / leaks escape codes into other panes. KITTY_WINDOW_ID is inherited into tmux, so also guard on $TMUX.
+if command -v kitten >/dev/null 2>&1 && [[ -n "$KITTY_WINDOW_ID" && -z "$TMUX" ]]; then
   alias ssh='kitten ssh'
 fi
 
