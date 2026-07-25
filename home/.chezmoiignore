@@ -1,7 +1,11 @@
 {{/* Patterns are matched against TARGET paths (relative to $HOME). */}}
 
-{{/* kitty is a desktop GUI terminal: apply on macOS/Linux desktops, but skip
-     inside containers / Codespaces / headless (Docker + Podman markers). */}}
-{{ if or (stat "/.dockerenv") (stat "/run/.containerenv") (env "REMOTE_CONTAINERS") (env "CODESPACES") }}
+{{/* kitty is a desktop GUI terminal: apply on macOS/Linux desktops, but skip where
+     there is no display to run it on. "Container" was too narrow a test — a Lima /
+     cloud VM is not a container, so it was getting a kitty config it can never use.
+     The real question is "is there a GUI here", so also skip on Linux with no
+     DISPLAY/WAYLAND_DISPLAY. (macOS always has a GUI, hence the os check.) */}}
+{{ if or (stat "/.dockerenv") (stat "/run/.containerenv") (env "REMOTE_CONTAINERS") (env "CODESPACES")
+         (and (eq .chezmoi.os "linux") (not (env "DISPLAY")) (not (env "WAYLAND_DISPLAY"))) }}
 .config/kitty
 {{ end }}

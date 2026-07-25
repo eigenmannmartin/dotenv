@@ -10,6 +10,15 @@ is_container() {
     || [ -n "${REMOTE_CONTAINERS:-}" ] || [ -n "${CODESPACES:-}" ] \
     || [ -n "${container:-}" ]
 }
+# GUI payloads (kitty, fonts) are pointless without a display to render them on.
+# "Is it a container" was the wrong question: a Lima/cloud VM is not a container,
+# so it was downloading ~150 MB of kitty + Nerd Font into a headless box that can
+# never use either — the glyphs are rendered by the terminal on YOUR machine.
+is_headless() {
+  is_container && return 0
+  [ "$(uname -s)" = "Darwin" ] && return 1     # macOS always has a GUI
+  [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]
+}
 
 {{ if eq .chezmoi.os "darwin" -}}
 if have brew; then
@@ -33,8 +42,12 @@ SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
 if have apt-get; then
   export DEBIAN_FRONTEND=noninteractive
   $SUDO apt-get update -qq || true
+  # kitty-terminfo + ncurses-term: ssh forwards $TERM but not terminfo. Without an
+  # xterm-kitty entry, tmux refuses to start outright and OSC 52 (clipboard over ssh)
+  # is unavailable. See 25-terminfo for the no-apt fallbacks.
   $SUDO apt-get install -y -qq \
     zsh tmux git curl unzip ca-certificates fontconfig ripgrep fzf bat neovim \
+    kitty-terminfo ncurses-term \
     python3 direnv nodejs jq btop \
     || echo "WARN: some apt packages failed to install"
   # gh/yq/mise/kubecolor/git-absorb/dust/duf/procs vary by release — install via Homebrew-on-Linux or upstream releases.
@@ -85,9 +98,11 @@ if ! have lazygit; then
   else echo "WARN: could not resolve lazygit version"; fi
 fi
 
-# Desktop-only (skipped in containers): kitty + FiraCode Nerd Font
-if is_container; then
-  echo "==> container detected: skipping kitty + fonts (host-only)"
+# Desktop-only: kitty + FiraCode Nerd Font. Skipped anywhere without a display —
+# containers AND headless VMs. When you ssh in from kitty on a Mac, the font and the
+# terminal both live on the Mac; the remote only ever needs the terminfo entry.
+if is_headless; then
+  echo "==> headless (no display): skipping kitty + fonts — terminfo is all a remote needs"
 else
   if ! have kitty; then
     echo "==> installing kitty"
@@ -179,6 +194,28 @@ if have gh; then
   gh extension list 2>/dev/null | grep -q 'dlvhdr/gh-dash' \
     || gh extension install dlvhdr/gh-dash >/dev/null 2>&1 || true
 fi
+
+{{ if eq .chezmoi.os "linux" -}}
+# This repo is zsh-only (~10 KB of ~/.zshrc: prompt, aliases, fzf-tab, tmux autostart).
+# On a box where the login shell is still bash — the default for a fresh Lima/cloud VM —
+# ALL of it is inert, and nothing says so, which is easy to miss over ssh.
+# macOS already defaults to zsh, so this is Linux-only. Opt out with DOTENV_NO_CHSH=1.
+if [ "${DOTENV_NO_CHSH:-0}" != "1" ] && have zsh; then
+  _SUDO=""; [ "$(id -u)" -ne 0 ] && _SUDO="sudo"
+  _zsh="$(command -v zsh)"
+  _cur="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7)"
+  if [ -n "$_cur" ] && [ "$_cur" != "$_zsh" ]; then
+    grep -qxF "$_zsh" /etc/shells 2>/dev/null || echo "$_zsh" | $_SUDO tee -a /etc/shells >/dev/null
+    # chsh prompts for a password under PAM; sudo works unattended where it's passwordless.
+    if $_SUDO chsh -s "$_zsh" "$(id -un)" 2>/dev/null || chsh -s "$_zsh" 2>/dev/null; then
+      echo "==> login shell -> $_zsh (was $_cur); takes effect on your next login"
+    else
+      echo "WARN: could not change login shell — run: chsh -s $_zsh"
+    fi
+  fi
+  unset _SUDO _zsh _cur
+fi
+{{ end -}}
 
 # Dev Containers CLI via npm global; Linux may need a writable npm prefix.
 if have npm && ! have devcontainer; then
