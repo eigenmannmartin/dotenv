@@ -15,8 +15,21 @@ if [ ! -d "$TPM_DIR" ]; then
 fi
 
 if command -v tmux >/dev/null 2>&1; then
-  echo "==> installing tmux plugins"
-  "$TPM_DIR/bin/install_plugins" >/dev/null 2>&1 || echo "WARN: tmux plugin install had issues"
+  # This step is how a missing terminfo stayed invisible: tmux refuses to start when
+  # $TERM has no entry here, install_plugins died instantly, and the output went to
+  # /dev/null behind a generic WARN — leaving ~/.tmux/plugins with only tpm in it.
+  # Fall back to a TERM that always resolves, and surface the real error.
+  TPM_TERM="${TERM:-xterm-256color}"
+  tput -T "$TPM_TERM" longname >/dev/null 2>&1 || TPM_TERM=xterm-256color
+  echo "==> installing tmux plugins (TERM=$TPM_TERM)"
+  _tpm_log="$(mktemp)"
+  if TERM="$TPM_TERM" "$TPM_DIR/bin/install_plugins" >"$_tpm_log" 2>&1; then
+    echo "==> tmux plugins installed"
+  else
+    echo "WARN: tmux plugin install had issues:"
+    tail -n 10 "$_tpm_log"
+  fi
+  rm -f "$_tpm_log"
 else
   echo "WARN: tmux not installed yet; run 'prefix + I' inside tmux later"
 fi

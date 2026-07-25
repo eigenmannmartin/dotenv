@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# Prefix-less fzf project switcher: pick a ~/code project, create-or-switch a tmux session named after it. Bound to M-f.
+# Prefix-less fzf project switcher: pick a project, create-or-switch a tmux session named after it. Bound to M-f.
 set -euo pipefail
 
-root="$HOME/code"
-[ -d "$root" ] || exit 0
+# Defaults to ~/code; set DOTENV_CODE_ROOT where projects live elsewhere (e.g. a VM
+# that clones somewhere else). Without a match this exits 0 and M-f looks broken.
+root="${DOTENV_CODE_ROOT:-$HOME/code}"
+if [ ! -d "$root" ]; then
+  echo "tmux-sessionizer: '$root' does not exist — set DOTENV_CODE_ROOT to your projects dir" >&2
+  sleep 2
+  exit 0
+fi
 
 selected=$(
   {

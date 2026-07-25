@@ -1,3 +1,7 @@
+# TERM safety net — must run before anything that inspects terminal capabilities.
+# (A $TERM with no terminfo entry on this machine makes tmux refuse to start.)
+[ -r "$HOME/.config/dotenv/term-guard.sh" ] && . "$HOME/.config/dotenv/term-guard.sh"
+
 if command -v oh-my-posh >/dev/null; then
   _omp_cfg="$HOME/.config/oh-my-posh/config.omp.json"
   if [[ -r "$_omp_cfg" ]]; then
@@ -16,7 +20,9 @@ typeset -ga DOTENV_PROJECT_PALETTE=(
   '#ed8796' '#f5a97f' '#eed49f' '#a6da95' '#8bd5ca' '#7dc4e4' '#8aadf4' '#c6a0f6' '#f5bde6' '#f0c6c6'
 )
 _dotenv_project_badge() {
-  local root="$HOME/code" proj=""
+  # Override with DOTENV_CODE_ROOT where projects don't live in ~/code (e.g. a VM
+  # that clones somewhere else) — otherwise the badge silently never fires.
+  local root="${DOTENV_CODE_ROOT:-$HOME/code}" proj=""
   [[ "$PWD/" == "$root"/* ]] && proj="${${PWD#$root/}%%/*}"
   if [[ -z "$proj" ]]; then
     unset DOTENV_PROJECT DOTENV_PROJECT_COLOR
@@ -39,22 +45,30 @@ autoload -Uz add-zsh-hook
 add-zsh-hook chpwd _dotenv_project_badge
 _dotenv_project_badge
 
-# Added by LM Studio CLI (lms)
-export PATH="$PATH:/Users/martin/.lmstudio/bin"
-export PATH="$PATH:/Users/martin/flutter/bin"
-# End of LM Studio CLI section
+# Vendor blocks appended by macOS installers. Hardcoded /Users/martin paths, so they're
+# macOS-only by construction — and actively wrong in a Lima VM, where the Mac home is
+# mounted read-only at that same path and anything found there is a Mach-O binary that
+# cannot execute on Linux. Guarded rather than deleted so the installers can re-append.
+if [[ "$OSTYPE" == darwin* ]]; then
+  # Added by LM Studio CLI (lms)
+  export PATH="$PATH:/Users/martin/.lmstudio/bin"
+  export PATH="$PATH:/Users/martin/flutter/bin"
+  # End of LM Studio CLI section
 
-# The following lines have been added by Docker Desktop to enable Docker CLI completions.
-fpath=(/Users/martin/.docker/completions $fpath)
-# End of Docker CLI completions
+  # The following lines have been added by Docker Desktop to enable Docker CLI completions.
+  fpath=(/Users/martin/.docker/completions $fpath)
+  # End of Docker CLI completions
+fi
 
 # Initialize completions once — after all fpath edits, before the compdef/fzf-tab setup below.
 # (Hoisted out of the Docker block so removing that vendor block can't silently break completion.)
 # ponytail: plain compinit; switch to `compinit -C` to skip the slow security audit if startup drags.
 autoload -Uz compinit && compinit
-export PATH=$PATH:/Users/martin/.runai/bin
-# runai prints "Failed to check for CLI updates." onto stdout, polluting the sourced completion; strip it.
-[ -x /Users/martin/.runai/bin/runai ] && source <(/Users/martin/.runai/bin/runai completion zsh 2>/dev/null | grep -v 'Failed to check for CLI updates')
+if [[ "$OSTYPE" == darwin* ]]; then
+  export PATH=$PATH:/Users/martin/.runai/bin
+  # runai prints "Failed to check for CLI updates." onto stdout, polluting the sourced completion; strip it.
+  [ -x /Users/martin/.runai/bin/runai ] && source <(/Users/martin/.runai/bin/runai completion zsh 2>/dev/null | grep -v 'Failed to check for CLI updates')
+fi
 
 # Use 1Password agent only when its socket exists, so devcontainer/Codespaces forwarded SSH_AUTH_SOCK is left alone.
 _op_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
@@ -62,6 +76,10 @@ _op_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
 unset _op_sock
 
 [ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
+# atuin's official installer puts the binary in ~/.atuin/bin and appends this to the
+# shell rc itself — which chezmoi then reverts, since it owns ~/.zshrc. Own it here so
+# `atuin init` below actually finds atuin on a Linux box installed via that script.
+[ -f "$HOME/.atuin/bin/env" ] && . "$HOME/.atuin/bin/env"
 
 # XDG: make lazygit & friends read ~/.config (macOS defaults elsewhere otherwise)
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"

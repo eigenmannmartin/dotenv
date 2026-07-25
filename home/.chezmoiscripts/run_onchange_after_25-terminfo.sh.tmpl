@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# dotenv: guarantee this machine has a terminfo entry for the terminal you SSH in from.
+#
+# Why this exists: ssh forwards $TERM but not terminfo. Coming from kitty on macOS
+# into a fresh Linux box, TERM=xterm-kitty resolves to nothing — and tmux does not
+# degrade, it refuses to start ("missing or unsuitable terminal: xterm-kitty").
+# That also silently blocks tpm plugin installation (30-tmux-plugins runs next) and
+# leaves no `Ms` capability, so OSC 52 — the only way to reach the system clipboard
+# over plain ssh — is unavailable. `kitten ssh` normally pushes terminfo for you, but
+# `limactl shell`, plain `ssh` and VS Code remotes all bypass it.
+#
+# Runs after 20 (kitty may have just been installed, giving an offline source) and
+# before 30 (which needs a startable tmux).
+set -uo pipefail
+
+{{ if eq .chezmoi.os "linux" -}}
+have() { command -v "$1" >/dev/null 2>&1; }
+
+ensure_terminfo() {  # <term-name>
+  local t="$1" src tmp SUDO
+
+  if infocmp -x "$t" >/dev/null 2>&1; then
+    echo "==> terminfo '$t' already present"; return 0
+  fi
+
+  # 1) A locally installed kitty ships its own terminfo: offline, no sudo, no network.
+  for src in "$HOME/.local/kitty.app/share/terminfo" /usr/lib/kitty/terminfo; do
+    if [ -f "$src/x/$t" ]; then
+      mkdir -p "$HOME/.terminfo/x" && cp "$src/x/$t" "$HOME/.terminfo/x/$t" \
+        && { echo "==> installed '$t' terminfo from $src"; return 0; }
+    fi
+  done
+
+  # 2) Distro package — system-wide, so root/sudo shells get it too.
+  if have apt-get; then
+    SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+    if $SUDO apt-get install -y -qq kitty-terminfo 2>/dev/null \
+       && infocmp -x "$t" >/dev/null 2>&1; then
+      echo "==> installed '$t' terminfo from apt (kitty-terminfo)"; return 0
+    fi
+  fi
+
+  # 3) Upstream source compiled into ~/.terminfo (no sudo, needs network).
+  if have tic && have curl; then
+    tmp="$(mktemp)"
+    if curl -fsSL -o "$tmp" \
+         https://raw.githubusercontent.com/kovidgoyal/kitty/master/terminfo/kitty.terminfo \
+       && tic -x -o "$HOME/.terminfo" "$tmp" 2>/dev/null; then
+      rm -f "$tmp"; echo "==> compiled '$t' terminfo into ~/.terminfo"; return 0
+    fi
+    rm -f "$tmp"
+  fi
+
+  echo "WARN: could not install terminfo for '$t' — tmux will refuse to start under TERM=$t"
+  return 1
+}
+
+ensure_terminfo xterm-kitty
+
+# The TERM guard has to reach BOTH shells. ~/.zshrc sources it directly (chezmoi
+# manages that file); ~/.bashrc is NOT chezmoi-managed — it's Ubuntu's stock file,
+# and other installers (atuin) already append to it — so wire it in idempotently.
+_guard="$HOME/.config/dotenv/term-guard.sh"
+_mark="# dotenv: term-guard"
+if [ -f "$HOME/.bashrc" ] && ! grep -qF "$_mark" "$HOME/.bashrc"; then
+  printf '\n%s\n[ -r "%s" ] && . "%s"\n' "$_mark" "$_guard" "$_guard" >> "$HOME/.bashrc"
+  echo "==> wired term-guard into ~/.bashrc"
+fi
+unset _guard _mark
+{{ end -}}
+
+echo "==> dotenv: terminfo step done"

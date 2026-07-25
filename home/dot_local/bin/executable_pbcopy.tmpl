@@ -1,0 +1,14 @@
+{{ if ne .chezmoi.os "darwin" -}}
+#!/bin/sh
+# pbcopy — the familiar macOS name, wired to osc52-copy. LINUX ONLY.
+#
+# Two independent gates keep this off macOS, where ~/.local/bin comes FIRST on
+# PATH (see dot_zprofile) and this would shadow the real /usr/bin/pbcopy:
+#   1. This file is a chezmoi *template* that renders empty on darwin, so
+#      chezmoi never creates it there — and actively removes a stale copy.
+#   2. The failsafe below, in case it ever arrives on a Mac by another route.
+[ "$(uname -s)" = "Darwin" ] && [ -x /usr/bin/pbcopy ] && exec /usr/bin/pbcopy "$@"
+
+# Resolved relative to this script rather than via PATH, so it can't recurse.
+exec "$(dirname "$0")/osc52-copy" "$@"
+{{ end -}}

@@ -1,0 +1,75 @@
+#!/bin/sh
+# osc52-copy — copy stdin to the clipboard of the terminal you are *looking at*,
+# using the OSC 52 escape sequence. Works over plain ssh with no X11/Wayland, no
+# clipboard daemon and no forwarding: the bytes ride the existing pty.
+#
+#   some-cmd | osc52-copy          # -> system clipboard
+#   some-cmd | osc52-copy -p       # -> PRIMARY selection (X11 only; no-op on macOS)
+#
+# Deliberately does NOT shell out to xclip/xsel: on a headless box (a Lima VM,
+# a container) DISPLAY is empty and xclip fails or blocks, which is worse than
+# it not being installed at all.
+set -u
+
+sel=c
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -p|--primary)   sel=p; shift ;;
+    -c|--clipboard) sel=c; shift ;;
+    -h|--help)
+      cat <<'EOF'
+usage: osc52-copy [-c|--clipboard | -p|--primary]
+
+Reads stdin, base64-encodes it and writes an OSC 52 escape to the controlling
+terminal, so the text lands on the clipboard of the machine running the
+terminal — not the machine running this command.
+EOF
+      exit 0 ;;
+    --) shift; break ;;
+    *)  printf 'osc52-copy: unknown option %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+
+# The escape MUST go to the terminal, never to stdout, or `cmd | osc52-copy | less`
+# would inject control bytes into the pipeline.
+# NB: the probe runs in a SUBSHELL on purpose — `:` is a POSIX *special* builtin,
+# and a redirection error on one makes a non-interactive dash exit immediately.
+if ( : >/dev/tty ) 2>/dev/null; then
+  out=/dev/tty
+elif [ -t 2 ]; then
+  out=/dev/stderr
+else
+  echo "osc52-copy: no controlling terminal to write the OSC 52 escape to" >&2
+  exit 1
+fi
+
+b64=$(base64 | tr -d '\r\n')
+[ -n "$b64" ] || exit 0   # empty input: don't silently wipe the clipboard
+
+in_tmux=0; in_screen=0
+[ -n "${TMUX:-}" ] && in_tmux=1
+if [ "$in_tmux" -eq 0 ]; then
+  if [ -n "${STY:-}" ]; then
+    in_screen=1
+  else
+    case "${TERM:-}" in screen*) in_screen=1 ;; esac
+  fi
+fi
+
+if [ "$in_tmux" -eq 1 ]; then
+  # tmux DCS passthrough. Belt-and-braces: with `set-clipboard on` (this repo's
+  # setting) tmux already forwards a plain OSC 52 from a pane, but passthrough
+  # also works when set-clipboard is `external`/`off`, where plain OSC 52 is
+  # swallowed. Needs `allow-passthrough on` — already set in this repo.
+  # Inner ESC must be doubled; the inner sequence is BEL-terminated by convention.
+  printf '\033Ptmux;\033\033]52;%s;%s\a\033\\' "$sel" "$b64" >"$out"
+elif [ "$in_screen" -eq 1 ]; then
+  # GNU screen truncates long DCS strings, so re-open a DCS for every chunk.
+  { printf '\033P\033]52;%s;' "$sel"
+    printf '%s' "$b64" | fold -w 76 | awk 'NR>1{printf "\033\\\033P"} {printf "%s", $0}'
+    printf '\a\033\\'
+  } >"$out"
+else
+  # Plain terminal — this is the "kitty -> ssh into the VM" case.
+  printf '\033]52;%s;%s\033\\' "$sel" "$b64" >"$out"
+fi
