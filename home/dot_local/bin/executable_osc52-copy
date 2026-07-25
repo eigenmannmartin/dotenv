@@ -57,12 +57,19 @@ if [ "$in_tmux" -eq 0 ]; then
 fi
 
 if [ "$in_tmux" -eq 1 ]; then
-  # tmux DCS passthrough. Belt-and-braces: with `set-clipboard on` (this repo's
-  # setting) tmux already forwards a plain OSC 52 from a pane, but passthrough
-  # also works when set-clipboard is `external`/`off`, where plain OSC 52 is
-  # swallowed. Needs `allow-passthrough on` — already set in this repo.
+  # DCS passthrough bypasses BOTH tmux's set-clipboard check and the outer
+  # terminal's `clipboard` termfeature, so prefer it — but ONLY after asking,
+  # because `allow-passthrough` is not a tmux default: with it off tmux discards
+  # the DCS and nothing at all is copied (verified, tmux 3.6). The plain fallback
+  # is not a downgrade here — with `set-clipboard on` (this repo's setting) tmux
+  # forwards a plain OSC 52 from a pane, and it additionally lands in a tmux
+  # paste buffer, so `prefix ]` works.
   # Inner ESC must be doubled; the inner sequence is BEL-terminated by convention.
-  printf '\033Ptmux;\033\033]52;%s;%s\a\033\\' "$sel" "$b64" >"$out"
+  if [ "$(tmux show -gv allow-passthrough 2>/dev/null)" = "on" ]; then
+    printf '\033Ptmux;\033\033]52;%s;%s\a\033\\' "$sel" "$b64" >"$out"
+  else
+    printf '\033]52;%s;%s\033\\' "$sel" "$b64" >"$out"
+  fi
 elif [ "$in_screen" -eq 1 ]; then
   # GNU screen truncates long DCS strings, so re-open a DCS for every chunk.
   { printf '\033P\033]52;%s;' "$sel"

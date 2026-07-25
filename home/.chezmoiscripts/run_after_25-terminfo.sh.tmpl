@@ -10,7 +10,15 @@
 # `limactl shell`, plain `ssh` and VS Code remotes all bypass it.
 #
 # Runs after 20 (kitty may have just been installed, giving an offline source) and
-# before 30 (which needs a startable tmux).
+# before 30 (which needs a startable tmux) — chezmoi orders scripts by the STRIPPED
+# target name (.chezmoiscripts/25-terminfo.sh), so the run_ prefix does not disturb
+# the 20 -> 25 -> 30 order.
+#
+# run_after_, deliberately not run_onchange_: this asserts an invariant rather than
+# performing a one-off install, and every source below can fail transiently (apt
+# unreachable, no network). run_onchange_ hashes the script, runs it once and never
+# retries — one unlucky first apply would leave the box permanently without terminfo.
+# When the entry is already there the whole script is a single infocmp, about 1 ms.
 set -uo pipefail
 
 {{ if eq .chezmoi.os "linux" -}}
@@ -43,7 +51,7 @@ ensure_terminfo() {  # <term-name>
   # 3) Upstream source compiled into ~/.terminfo (no sudo, needs network).
   if have tic && have curl; then
     tmp="$(mktemp)"
-    if curl -fsSL -o "$tmp" \
+    if curl -fsSL --connect-timeout 5 --max-time 20 -o "$tmp" \
          https://raw.githubusercontent.com/kovidgoyal/kitty/master/terminfo/kitty.terminfo \
        && tic -x -o "$HOME/.terminfo" "$tmp" 2>/dev/null; then
       rm -f "$tmp"; echo "==> compiled '$t' terminfo into ~/.terminfo"; return 0
@@ -51,7 +59,14 @@ ensure_terminfo() {  # <term-name>
     rm -f "$tmp"
   fi
 
-  echo "WARN: could not install terminfo for '$t' — tmux will refuse to start under TERM=$t"
+  # No step 4 here on purpose: ~/.config/dotenv/term-guard.sh already covers the
+  # "terminfo could not be installed" case at shell level by falling $TERM back to
+  # xterm-256color (which does resolve, and whose terminfo has Ms, so tmux still
+  # starts AND still emits OSC 52). A second fallback that writes an alias entry into
+  # ~/.terminfo would shadow /usr/share/terminfo and mask a real kitty-terminfo
+  # installed later, so it would need its own detect/delete/throttle machinery to be
+  # safe. One mechanism, in the simpler place.
+  echo "WARN: could not install terminfo for '$t' — falling back to term-guard.sh (TERM -> xterm-256color)"
   return 1
 }
 
