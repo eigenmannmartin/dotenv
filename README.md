@@ -47,7 +47,7 @@ DOTENV_FEATURES=core,dev,k8s,vpn ./install.sh # everything
 | `core` | zsh + plugins, tmux + tpm, terminfo, oh-my-posh, atuin, fzf/ripgrep/bat/eza/zoxide/delta/fd |
 | `devlite` | neovim + LazyVim config, lazygit, node, jq, direnv, btop, devcontainer CLI + `dx` (macOS also yq, gh + gh-dash, mise, git-absorb, dust/duf/procs) |
 | `dev` | **`devlite` + the container layer**: OrbStack (macOS only) and lazydocker/dive (+ ctop on macOS) |
-| `k8s` | k9s + its config (macOS also kubectx/stern/helm/kubecolor) |
+| `k8s` | k9s + its config; kubectl on Linux (macOS also kubectx/stern/helm/kubecolor) |
 | `vpn` | openconnect + openconnect-saml → the [`cisco-vpn`](#cisco-vpn-entra-id-sso-from-the-lima-vm) command |
 | `ai` | Claude Code + Codex CLIs (`claude`, `codex`) + [Backlog.md](#backlogmd-boards) (`backlog`), via npm — implies `devlite` for node |
 | `docker` | docker engine + compose, so [devcontainers](#dev-containers) run in the VM itself |
@@ -657,7 +657,8 @@ the default, so a plain apply installs the shell and nothing else:
   dies silently under dash during `vm new`, where there isn't one. `devlite` adds
   neovim/python3/nodejs/jq/btop/direnv from apt and lazygit from its GitHub release;
   `dev` adds lazydocker + dive the same way (no OrbStack — macOS only — so pair it
-  with `docker` for an engine); `k8s` adds k9s the same way; `vpn` adds
+  with `docker` for an engine); `k8s` adds k9s the same way, plus kubectl from
+  dl.k8s.io (macOS gets kubectl from OrbStack, so this is Linux-only); `vpn` adds
   openconnect + vpnc-scripts + openconnect-saml. **`yq`, `gh`, `mise`,
   `git-absorb` and the container tools remain macOS-only** — install them from
   Homebrew-on-Linux or upstream releases if you want them in a VM. LazyVim needs

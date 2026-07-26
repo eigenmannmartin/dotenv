@@ -254,6 +254,37 @@ gh_release_install wagoodman/dive dive 'dive_%V_linux_%G.tar.gz'
 {{ if $k8s }}
 mkdir -p "$HOME/.local/bin"
 gh_release_install derailed/k9s k9s 'k9s_Linux_%G.tar.gz'
+
+# kubectl publishes a bare binary on dl.k8s.io rather than a GitHub release tarball,
+# so gh_release_install cannot fetch it — hence the hand-rolled copy of its arch case.
+# On macOS this comes from OrbStack (Brewfile.dev) instead; on Linux there is no
+# equivalent, and k9s without kubectl is half a toolchain.
+# stable.txt is whatever upstream just released; kubectl supports a server within one
+# minor of itself, so hardcode a version here if a cluster ever falls further behind.
+if ! have kubectl; then
+  echo "==> installing kubectl"
+  case "$(uname -m)" in
+    x86_64|amd64)  _karch=amd64 ;;
+    aarch64|arm64) _karch=arm64 ;;
+    *)             _karch="$(uname -m)" ;;
+  esac
+  _kver="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+  if [ -z "$_kver" ]; then
+    echo "WARN: could not resolve kubectl version"
+  else
+    # Staged through a temp file so a failed download cannot leave a truncated
+    # binary sitting on PATH, where `have kubectl` would then skip re-installing it.
+    _ktmp="$(mktemp)"
+    if curl -fLso "$_ktmp" \
+        "https://dl.k8s.io/release/${_kver}/bin/linux/${_karch}/kubectl"; then
+      install -m755 "$_ktmp" "$HOME/.local/bin/kubectl"
+    else
+      echo "WARN: kubectl download failed"
+    fi
+    rm -f "$_ktmp"
+  fi
+  unset _kver _karch _ktmp
+fi
 {{ end }}
 
 # Desktop-only: kitty + FiraCode Nerd Font. Skipped anywhere without a display —

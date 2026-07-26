@@ -1,7 +1,8 @@
 # dotenv macOS dependencies — "k8s" feature. Cluster inspection tooling.
 # Pulled in when DOTENV_FEATURES contains "k8s". kubectl itself comes from OrbStack
 # (Brewfile.dev), so enable "dev" — not just "devlite" — alongside this on a Mac that
-# talks to clusters; on Linux install kubectl yourself.
+# talks to clusters. Linux has no OrbStack, so the install script fetches kubectl from
+# dl.k8s.io there instead.
 brew "k9s"          # TUI dashboard for Kubernetes clusters
 brew "kubecolor"    # colorized kubectl (aliased to k / kubectl in ~/.zshrc)
 brew "kubectx"      # switch kube contexts + namespaces (installs kubens)
