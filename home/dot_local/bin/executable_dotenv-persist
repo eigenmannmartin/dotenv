@@ -11,6 +11,7 @@
 #   dotenv-persist status       show what is shared, local, or not yet created
 #   dotenv-persist add PATH     also share $HOME/PATH from now on
 #   dotenv-persist unshare PATH stop sharing it and put the real file back
+#   dotenv-persist project DIR  share a dir from the CURRENT REPO (e.g. .backlog)
 #
 # Re-run it after a login: a few tools replace a file by rename(), which swaps out
 # our symlink. This re-captures anything that came unlinked — the newer of the two
@@ -104,6 +105,12 @@ link_one() {
   ln -sfn "$dst" "$src"
 }
 
+# Before the store check below, which otherwise swallows --help on any machine that
+# has no shared store — i.e. every Mac and devcontainer.
+case "${1:-}" in
+  -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
 PERSIST=""
 if ! PERSIST="$(persist_dir)"; then
   case "${1:-link}" in
@@ -157,6 +164,32 @@ EOF
     echo "==> added $rel to $LIST_FILE"
     ;;
 
+  project)
+    # Per-PROJECT state, as opposed to the $HOME-relative credentials above: move a
+    # directory out of the repo into the shared store and symlink it back. Written for
+    # Backlog.md's task folder — the board should outlive `vm rm` without being
+    # committed — but nothing here is specific to it.
+    #
+    # Only needed when the repo lives INSIDE the VM. A repo on a `vm --mount` is
+    # already on the Mac's disk and survives a rebuild on its own.
+    rel="${2:?usage: dotenv-persist project <dir relative to the repo root>}"; rel="${rel%/}"
+    safe_rel "$rel" || die "'$rel' must be inside the repo and must not contain '..'"
+    root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    src="$root/$rel"
+    dst="$PERSIST/projects/$(basename "$root")/$rel"
+    if [ -L "$src" ]; then
+      echo "==> $rel is already shared (-> $(readlink "$src"))"; exit 0
+    fi
+    [ -e "$src" ] || die "no $rel in $root"
+    [ -e "$dst" ] && die "$dst already exists — move or remove it first"
+    mkdir -p "$(dirname "$dst")"
+    mv "$src" "$dst"
+    ln -s "$dst" "$src"
+    echo "==> $rel now lives in $dst"
+    echo "    it survives 'vm rm', and every VM on this store sees the same content"
+    echo "    remember to gitignore $rel if it should stay out of the repo"
+    ;;
+
   unshare)
     # For paths a tool turns out to reject as a symlink (see ~/.config/op above), and
     # for anything you would rather keep VM-local. The shared copy is moved back into
@@ -183,6 +216,5 @@ EOF
     fi
     ;;
 
-  -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$1' (link|status|add|unshare)" ;;
+  *) die "unknown command '$1' (link|status|add|unshare|project)" ;;
 esac

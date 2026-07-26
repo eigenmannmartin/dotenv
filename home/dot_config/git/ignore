@@ -2,8 +2,9 @@
 # it is the XDG fallback ($XDG_CONFIG_HOME/git/ignore). Rules here apply to EVERY
 # repo on the machine, so keep them to things that are never anyone's source.
 
-# BacklogMD keeps its backlog as plain markdown inside the project, at .backlogmd/.
-# Its docs make tracking optional ("if you do not want the backlog files tracked,
-# just add them to .gitignore"). Ignoring it globally means no per-repo .gitignore
-# edit — and no accidental commit of agent scratch work into someone else's repo.
-.backlogmd/
+# Backlog.md's task folder, when you keep the board out of the project's history.
+# The DOT-prefixed spelling on purpose: Backlog.md also supports a plain `backlog/`,
+# but globally ignoring that would hide legitimately-named directories in unrelated
+# repos — Backlog.md's own repo keeps its tasks in `backlog/`. If you use the default
+# name, put it in that project's own .gitignore instead of here.
+.backlog/
