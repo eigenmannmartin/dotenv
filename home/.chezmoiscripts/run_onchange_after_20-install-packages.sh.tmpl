@@ -67,9 +67,18 @@ gh_release_install() {
 
 # Global npm CLIs (devcontainer, claude, codex). Defined unconditionally because more
 # than one feature needs it.
-npm_global_install() {   # <package> <binary>
+npm_global_install() {   # <package> [min-node-major]
   have "$2" && return 0
-  have npm || { echo "WARN: npm missing — cannot install $1 (needs the 'dev' feature)"; return 0; }
+  # Loud, and says what to do: this silently swallowed every npm install on a fresh
+  # Ubuntu VM, because `nodejs` there ships without npm.
+  have npm || { echo "WARN: npm not installed — skipping $1. Fix with: sudo apt-get install -y npm" >&2; return 0; }
+  if [ -n "${3:-}" ]; then
+    _nodemaj="$(node -v 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/')"
+    if [ -n "$_nodemaj" ] && [ "$_nodemaj" -lt "$3" ]; then
+      echo "WARN: $1 needs node >= $3, this box has $(node -v) — skipping" >&2
+      return 0
+    fi
+  fi
   echo "==> installing $2"
   if ! npm install -g "$1" >/dev/null 2>&1; then
     # A distro node puts its global prefix under /usr, which needs root. Rather than
@@ -121,7 +130,12 @@ if have apt-get; then
 {{ if $dev }}
   # dev — editor + language runtimes. Biggest single chunk of a full install, and
   # dead weight on a VM you only ssh into to run one service.
-  apt_install neovim python3 nodejs jq btop direnv \
+  #
+  # npm is listed EXPLICITLY: Debian/Ubuntu split it out of the nodejs package, so
+  # `nodejs` alone gives you `node` and no `npm`. Everything installed through npm
+  # below (devcontainer, claude, codex) then silently skipped with a warning that
+  # scrolled past during provisioning.
+  apt_install neovim python3 nodejs npm jq btop direnv \
     || echo "WARN: some dev apt packages failed to install"
 {{ end }}
 {{ if $vpn }}
@@ -287,11 +301,12 @@ npm_global_install @devcontainers/cli devcontainer
 {{ end }}
 
 {{ if $ai }}
-# ai — coding agents. Both ship on npm and both are self-updating afterwards, so this
-# only has to bootstrap them. `claude` and `codex` authenticate per machine; the
-# resulting credentials are shared between VMs by dotenv-persist.
-npm_global_install @anthropic-ai/claude-code claude
-npm_global_install @openai/codex codex
+# ai — coding agents. Both ship on npm with zero dependencies and self-update
+# afterwards, so this only has to bootstrap them. `claude` and `codex` authenticate
+# per machine; the credentials are shared between VMs by dotenv-persist.
+# The node floors come from each package's own "engines" field.
+npm_global_install @anthropic-ai/claude-code claude 22
+npm_global_install @openai/codex codex 16
 {{ end }}
 
 {{ if eq .chezmoi.os "linux" -}}
