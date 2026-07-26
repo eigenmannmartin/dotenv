@@ -47,7 +47,7 @@ DOTENV_FEATURES=core,dev,k8s,vpn ./install.sh # everything
 | `dev` | neovim + LazyVim config, lazygit, node, jq, direnv, btop, devcontainer CLI + `dx` (macOS also yq, gh + gh-dash, mise, git-absorb, OrbStack, dust/duf/procs) |
 | `k8s` | k9s + its config (macOS also kubectx/stern/helm/kubecolor) |
 | `vpn` | openconnect + openconnect-saml → the [`cisco-vpn`](#cisco-vpn-entra-id-sso-from-the-lima-vm) command |
-| `ai` | Claude Code + Codex CLIs (`claude`, `codex`), via npm — implies `dev` for node |
+| `ai` | Claude Code + Codex CLIs (`claude`, `codex`) + BacklogMD's board server → [`backlog`](#backlogmd-boards), via npm — implies `dev` for node |
 | `docker` | docker engine + compose, so [devcontainers](#dev-containers) run in the VM itself |
 
 The choice is frozen into `~/.config/chezmoi/chezmoi.toml` by
@@ -185,6 +185,7 @@ that loses is kept as `.dotenv-bak` rather than deleted.
 | `~/.config/nvim` | **LazyVim** + Catppuccin Macchiato + **lang extras** (Go/Py/Docker/k8s/Helm/Dart + DAP); `lazy-lock` pinned |
 | `~/.config/atuin/config.toml` | atuin shell history — **synced to the home-network server** (set `sync_address`) |
 | `~/.config/{k9s,lazygit,gh-dash,direnv}` | k9s (blue skin + full logs), lazygit & gh-dash themes, direnv `use_op` secrets helper |
+| `~/.config/git/ignore` | global gitignore (git reads it with no config) — currently `.backlogmd/` |
 | `~/.config/dotenv/secrets.env` | `op://` references for [`secrets`](#secrets-into-env-vars-and-logins) — **created once, never overwritten** |
 | `~/.local/bin/{secrets,dotenv-persist}` | 1Password → env/logins, and logins shared across VM rebuilds |
 | `~/.lima/_templates/dotenv.yaml` + `~/.local/bin/vm` | [Lima VMs](#lima-vms) — **host-only** |
@@ -271,6 +272,42 @@ Set `sync_address` in [`atuin/config.toml`](home/dot_config/atuin/config.toml), 
 `secrets login atuin` (see [1Password](#1password)) — or by hand,
 `atuin login -u <user> -k <key>` + `atuin sync`. One history everywhere; the login
 itself survives VM rebuilds via [`dotenv-persist`](#logins-that-survive-a-rebuild).
+
+## BacklogMD boards
+
+[BacklogMD](https://www.backlogmd.com/en) is a protocol, not an app: the backlog is
+plain markdown under `.backlogmd/` in the project, which coding agents read and write.
+[`backlog`](home/dot_local/bin/executable_backlog) runs the kanban dashboard over it.
+
+```sh
+backlog init          # create .backlogmd/{backlog.md,work/}
+backlog               # serve this repo's board in the background
+backlog status        # which repo, which port, which URL
+backlog stop
+backlog persist       # only if the repo lives inside the VM — see below
+```
+
+**No port forwarding needed.** Lima forwards every guest loopback listener to the
+Mac's `127.0.0.1`, so a board served on `localhost:3030` *inside* the VM opens at
+`http://localhost:3030` in the Mac's browser — the same mechanism the VPN SSO callback
+rides on. The flip side: two VMs both serving on 3030 collide on the host, so give the
+second one `-p 3031`. One board per VM, which keeps the state files and the forwarded
+port unambiguous.
+
+**Keeping it out of the repo** is handled globally, not per project.
+[`~/.config/git/ignore`](home/dot_config/git/ignore) lists `.backlogmd/`, and git reads
+that path by default — no `core.excludesFile`, no per-repo `.gitignore` edit, and no
+way to accidentally commit agent scratch work into someone else's repo. (BacklogMD's
+own docs make tracking optional.)
+
+**Persisting it** depends on where the repo lives, and the good case needs nothing:
+
+- **Repo on a `--mount`** (`vm new work --mount ~/code`): `.backlogmd/` is already on
+  the Mac's disk. It survives `vm rm` for free. This is the shape to prefer.
+- **Repo cloned inside the VM**: it dies with the VM. `backlog persist` moves
+  `.backlogmd/` into the [shared store](#logins-that-survive-a-rebuild) under
+  `backlogmd/<repo>/` and symlinks it back, so it survives rebuilds — and every VM
+  sharing that store sees the same board.
 
 ## tmux inside tmux
 
