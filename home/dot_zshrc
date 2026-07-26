@@ -84,7 +84,74 @@ unset _op_sock
 # XDG: make lazygit & friends read ~/.config (macOS defaults elsewhere otherwise)
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 
-command -v atuin >/dev/null && eval "$(atuin init zsh)"
+# atuin history contexts — separate, switchable histories (work vs personal, per-VM,
+# per-client) out of one config. ATUIN_DATA_DIR relocates the whole store (db, key,
+# meta) and is the ONE atuin setting where the env var beats config.toml, so it is
+# the only safe thing to switch on: ATUIN_DB_PATH would silently stop working the
+# day db_path lands in config.toml. Isolation is total — a context sees only its own
+# commands. Each context gets its own encryption key, so `atuin login`/`sync` is
+# per-context too (that is what keeps them separate on the server as well).
+#
+#   atuin-ctx            show the active context      atuin-ctx ls    list them
+#   atuin-ctx work       switch this shell to "work"  atuin-ctx -     back to default
+#
+# A machine's default context comes from ~/.config/dotenv/atuin-ctx if present —
+# that is what `vm new` writes, so every VM starts with its own history.
+_atuin_reinit() {
+  command -v atuin >/dev/null || return 0
+  eval "$(atuin init zsh)"
+  # atuin init PREPENDS itself to the autosuggestion strategy every time it runs, so
+  # re-initialising on each switch would grow (atuin) -> (atuin atuin) -> … . (u) is
+  # zsh's dedupe flag; without it the strategy list grows without bound in a shell
+  # that changes context a few times.
+  [[ -n "${ZSH_AUTOSUGGEST_STRATEGY-}" ]] && \
+    typeset -ga ZSH_AUTOSUGGEST_STRATEGY=("${(@u)ZSH_AUTOSUGGEST_STRATEGY}")
+  # fzf --zsh also binds Ctrl-R, and init re-registers the keymap, so rebind after.
+  bindkey '^r' atuin-search 2>/dev/null
+  bindkey -M viins '^r' atuin-search 2>/dev/null
+  return 0
+}
+
+atuin-ctx() {
+  local base="${XDG_DATA_HOME:-$HOME/.local/share}/atuin-ctx"
+  case "${1-}" in
+    ''|--show) print -r -- "${ATUIN_CTX:-default}"; return 0 ;;
+    ls|--list)
+      print -r -- default
+      [ -d "$base" ] && command ls -1 "$base" 2>/dev/null
+      return 0 ;;
+    -|default) unset ATUIN_DATA_DIR ATUIN_CTX ;;
+    -*) print -ru2 -- "atuin-ctx: unknown option '$1'"; return 2 ;;
+    */*|.|..)
+      # A name is a directory component under $base; a path would escape it.
+      print -ru2 -- "atuin-ctx: invalid context name '$1'"; return 2 ;;
+    *)
+      export ATUIN_CTX="$1"
+      export ATUIN_DATA_DIR="$base/$1"
+      command mkdir -p "$ATUIN_DATA_DIR" ;;
+  esac
+  _atuin_reinit
+}
+
+if command -v atuin >/dev/null; then
+  _atuin_ctx_file="${XDG_CONFIG_HOME:-$HOME/.config}/dotenv/atuin-ctx"
+  _atuin_ctx=""
+  # Read, then strip whitespace/newlines. The value is validated rather than passed
+  # straight through: an empty or clipped file would otherwise hit the *show* branch
+  # (which returns before any init), leaving the shell with no atuin at all — no
+  # Ctrl-R, no recorded history, and no hint as to why.
+  [ -r "$_atuin_ctx_file" ] && _atuin_ctx="${$(<"$_atuin_ctx_file")##[[:space:]]#}"
+  _atuin_ctx="${_atuin_ctx%%[[:space:]]#}"
+  if [ -z "${ATUIN_DATA_DIR-}" ] && [[ "$_atuin_ctx" == [A-Za-z0-9._-]##  ]] \
+     && [[ "$_atuin_ctx" != (default|-|.|..) ]]; then
+    atuin-ctx "$_atuin_ctx" >/dev/null
+  else
+    [ -n "$_atuin_ctx" ] && [[ "$_atuin_ctx" != default ]] && \
+      print -ru2 -- "dotenv: ignoring invalid atuin context in $_atuin_ctx_file"
+    _atuin_reinit
+  fi
+  unset _atuin_ctx_file _atuin_ctx
+fi
 
 if command -v eza >/dev/null; then
   alias ls='eza --icons --group-directories-first --color=auto'

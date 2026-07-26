@@ -1,4 +1,12 @@
-{{/* Patterns are matched against TARGET paths (relative to $HOME). */}}
+{{/* Patterns are matched against TARGET paths (relative to $HOME).
+
+     Re-evaluated on every apply, so flipping a feature takes effect immediately —
+     but note chezmoi only FORGETS a newly-ignored file, it does not delete it.
+     Turning a feature off leaves its config behind; `chezmoi forget` to clean up.
+
+     Every key referenced here must exist on every machine: this file is parsed for
+     all chezmoi commands, and a missing key aborts the whole apply. `features` is
+     seeded in .chezmoidata.toml precisely so it is always defined. */}}
 
 {{/* kitty is a desktop GUI terminal: apply on macOS/Linux desktops, but skip where
      there is no display to run it on. "Container" was too narrow a test — a Lima /
@@ -8,4 +16,32 @@
 {{ if or (stat "/.dockerenv") (stat "/run/.containerenv") (env "REMOTE_CONTAINERS") (env "CODESPACES")
          (and (eq .chezmoi.os "linux") (not (env "DISPLAY")) (not (env "WAYLAND_DISPLAY"))) }}
 .config/kitty
+{{ end }}
+
+{{/* Feature-gated payloads. The nvim config is the big one: LazyVim bootstraps
+     dozens of plugins on first launch, which is pure cost on a VM you never edit in. */}}
+{{ if not (has "dev" .features) }}
+.config/nvim
+.config/gh-dash
+.config/direnv
+.config/lazygit
+{{/* dx shells into a repo's devcontainer via the devcontainer CLI, which only the
+     dev feature installs — shipping it to a core box gives a command that can only
+     ever print "devcontainer CLI missing". */}}
+.local/bin/dx
+{{ end }}
+
+{{ if not (has "k8s" .features) }}
+.config/k9s
+{{ end }}
+
+{{ if not (has "vpn" .features) }}
+.local/bin/cisco-vpn
+{{ end }}
+
+{{/* Lima lives on the host that runs the VMs — which is the Mac. Shipping VM
+     templates and the `vm` wrapper into a guest would just be confusing. */}}
+{{ if ne .chezmoi.os "darwin" }}
+.lima
+.local/bin/vm
 {{ end }}

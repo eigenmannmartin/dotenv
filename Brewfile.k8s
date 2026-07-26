@@ -1,0 +1,8 @@
+# dotenv macOS dependencies — "k8s" feature. Cluster inspection tooling.
+# Pulled in when DOTENV_FEATURES contains "k8s". kubectl itself comes from OrbStack
+# (Brewfile.dev), so enable "dev" alongside this on a machine that talks to clusters.
+brew "k9s"          # TUI dashboard for Kubernetes clusters
+brew "kubecolor"    # colorized kubectl (aliased to k / kubectl in ~/.zshrc)
+brew "kubectx"      # switch kube contexts + namespaces (installs kubens)
+brew "stern"        # tail logs across many Kubernetes pods at once
+brew "helm"         # Kubernetes package manager (charts)

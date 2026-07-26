@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # dotenv bootstrap: installs chezmoi if needed and applies this repo. Safe to re-run; entrypoint for VS Code/Codespaces dotfiles install.
+#
+# Pick what gets installed with DOTENV_FEATURES (default: core = shell only):
+#   DOTENV_FEATURES=core,dev ./install.sh      # + neovim/lazygit/node/devcontainer
+#   DOTENV_FEATURES=core,dev,k8s,vpn ./install.sh
+# The choice is frozen into ~/.config/chezmoi/chezmoi.toml by home/.chezmoi.toml.tmpl,
+# so later bare `chezmoi apply` runs keep it. Re-run with a new value to change it.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,19 +21,12 @@ if ! command -v chezmoi >/dev/null 2>&1; then
   fi
 fi
 
-# Persist sourceDir so a later bare `chezmoi apply` works. Without this, `--source`
-# is only remembered for this one invocation and every re-apply fails with
-# "stat ~/.local/share/chezmoi: no such file or directory".
-# Rewritten whenever it disagrees, not merely when missing: `chezmoi init` never
-# overwrites an existing config, so re-cloning this repo somewhere else would leave a
-# stale sourceDir behind — install.sh's own run applies from the new path while every
-# later bare `chezmoi apply` silently keeps applying the OLD checkout.
-CHEZMOI_CFG="${XDG_CONFIG_HOME:-$HOME/.config}/chezmoi/chezmoi.toml"
-if [ "$(sed -n 's/^sourceDir = "\(.*\)"$/\1/p' "$CHEZMOI_CFG" 2>/dev/null)" != "$REPO_DIR" ]; then
-  mkdir -p "$(dirname "$CHEZMOI_CFG")"
-  printf 'sourceDir = "%s"\n' "$REPO_DIR" > "$CHEZMOI_CFG"
-  echo "dotenv: wrote $CHEZMOI_CFG (sourceDir -> $REPO_DIR)"
-fi
+# sourceDir is emitted by home/.chezmoi.toml.tmpl, not written here. `chezmoi init`
+# overwrites ~/.config/chezmoi/chezmoi.toml wholesale once a config template exists,
+# so anything written here beforehand would be destroyed a moment later — and the
+# resulting config would have no sourceDir, breaking every later bare `chezmoi apply`
+# with "stat ~/.local/share/chezmoi: no such file or directory". Letting the template
+# own it also refreshes sourceDir automatically when the repo is re-cloned elsewhere.
 
 # .chezmoiroot points chezmoi at home/
 # --force only where chezmoi could not have prompted anyway. Managed files drift (nvim

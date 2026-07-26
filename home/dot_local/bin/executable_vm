@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# vm — purpose-built Lima VMs from this dotfiles repo. Runs on the HOST (the Mac).
+#
+#   vm new scratch                    throwaway box: shell only, fastest build
+#   vm new work --profile dev         + neovim/LazyVim, lazygit, node, devcontainer
+#   vm new hsg  --profile vpn         + openconnect/cisco-vpn (see `cisco-vpn --help`)
+#   vm new lab  --profile full --cpus 8 --memory 16 --disk 120
+#   vm ls | vm shell <name> [cmd…] | vm ssh <name> | vm stop <name> | vm rm <name>
+#
+# Profiles map to DOTENV_FEATURES, which is what actually decides the package set:
+#   min core | dev core,dev | k8s core,dev,k8s | vpn core,dev,vpn | full core,dev,k8s,vpn
+# Use --features to pass a set directly. Each VM also gets its own atuin history
+# (named after the instance) so a scratch box cannot pollute your laptop's.
+set -euo pipefail
+
+TEMPLATE="${VM_TEMPLATE:-dotenv}"        # ~/.lima/_templates/dotenv.yaml
+
+have() { command -v "$1" >/dev/null 2>&1; }
+die()  { echo "vm: $*" >&2; exit 1; }
+
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+profile_features() {
+  case "$1" in
+    min|core)  echo "core" ;;
+    dev)       echo "core,dev" ;;
+    k8s)       echo "core,dev,k8s" ;;
+    vpn)       echo "core,dev,vpn" ;;
+    full|all)  echo "core,dev,k8s,vpn" ;;
+    *)         die "unknown profile '$1' (min|dev|k8s|vpn|full)" ;;
+  esac
+}
+
+cmd="${1:-}"; [ $# -gt 0 ] && shift || true
+
+# Checked after --help so the usage text still works on a box without Lima.
+case "$cmd" in
+  ""|-h|--help) ;;
+  *) have limactl || die "limactl not found — install Lima on the host (brew install lima)" ;;
+esac
+
+case "$cmd" in
+  ""|-h|--help) usage 0 ;;
+
+  new|create)
+    name="${1:-}"; [ -n "$name" ] && [ "${name#-}" = "$name" ] || die "usage: vm new <name> [options]"
+    shift
+    features="core"; cpus=""; memory=""; disk=""; repo=""; ref=""; ctx=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --profile|-p) features="$(profile_features "${2:?--profile needs a value}")"; shift 2 ;;
+        --features|-f) features="${2:?--features needs a value}"; shift 2 ;;
+        --cpus)    cpus="${2:?}"; shift 2 ;;
+        --memory)  memory="${2:?}"; shift 2 ;;
+        --disk)    disk="${2:?}"; shift 2 ;;
+        --repo)    repo="${2:?}"; shift 2 ;;
+        --ref)     ref="${2:?}"; shift 2 ;;
+        --atuin-ctx) ctx="${2:?}"; shift 2 ;;
+        *) die "unknown option '$1'" ;;
+      esac
+    done
+
+    # --param is rejected outright for keys the template does not declare, so a
+    # typo here fails loudly at create time rather than silently doing nothing.
+    set -- --name="$name" --param "Features=$features"
+    [ -n "$repo" ] && set -- "$@" --param "Repo=$repo"
+    [ -n "$ref" ]  && set -- "$@" --param "Ref=$ref"
+    [ -n "$ctx" ]  && set -- "$@" --param "AtuinCtx=$ctx"
+    [ -n "$cpus" ]   && set -- "$@" --cpus="$cpus"
+    [ -n "$memory" ] && set -- "$@" --memory="$memory"
+    [ -n "$disk" ]   && set -- "$@" --disk="$disk"
+
+    echo "==> vm: creating '$name' (features: $features)"
+    # --tty=false: never drop into the interactive template picker.
+    # The readiness probe in the template is what makes a failed bootstrap fail here.
+    limactl start --tty=false "$@" "template://$TEMPLATE"
+    echo
+    echo "==> vm: '$name' ready — enter it with: vm shell $name"
+    ;;
+
+  ls|list)   limactl list "$@" ;;
+  shell|sh)  [ $# -ge 1 ] || die "usage: vm shell <name> [command…]"; exec limactl shell "$@" ;;
+  stop)      [ $# -ge 1 ] || die "usage: vm stop <name>"; exec limactl stop "$@" ;;
+  start)     [ $# -ge 1 ] || die "usage: vm start <name>"; exec limactl start "$@" ;;
+  rm|delete) [ $# -ge 1 ] || die "usage: vm rm <name>"; exec limactl delete "$@" ;;
+
+  ssh)
+    # Lima writes a per-instance ssh.config; with ssh-over-vsock (the default on
+    # macOS/vz since Lima 2.0) there may be no forwarded TCP port to target, so
+    # always go through that file rather than guessing host/port.
+    name="${1:?usage: vm ssh <name>}"; shift
+    cfg="${LIMA_HOME:-$HOME/.lima}/$name/ssh.config"
+    [ -f "$cfg" ] || die "no ssh config for '$name' — is it running?"
+    exec ssh -F "$cfg" "lima-$name" "$@"
+    ;;
+
+  *) die "unknown command '$cmd' (try: vm --help)" ;;
+esac

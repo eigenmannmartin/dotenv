@@ -5,7 +5,11 @@ set -uo pipefail
 
 # 1) Apply the dotfiles (chezmoi; the package installer is container-aware + self-gating). Non-fatal:
 #    even if a package step fails, we still want signing wired below.
-./install.sh || echo "WARN: dotfiles apply had issues — continuing to wire git signing."
+#    A devcontainer exists to run a repo's build/test commands, so it needs the dev
+#    toolchain — without this it would get the "core" default (shell only) and lose
+#    the very thing it is for. Override from the environment to build a leaner one.
+DOTENV_FEATURES="${DOTENV_FEATURES:-core,dev}" ./install.sh \
+  || echo "WARN: dotfiles apply had issues — continuing to wire git signing."
 
 # 2) Git identity — matches the host git identity (a GitHub-verified email) for the "Verified" badge.
 git config --global user.name  "Martin Eigenmann"

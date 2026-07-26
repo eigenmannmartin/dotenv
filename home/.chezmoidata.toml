@@ -1,0 +1,23 @@
+# Fallback feature set — the value used ONLY when this machine's
+# ~/.config/chezmoi/chezmoi.toml has no [data] features key of its own.
+#
+# In practice that means exactly one population: machines bootstrapped BEFORE
+# features existed, whose config holds nothing but a sourceDir line. They must keep
+# getting everything, or a plain `git pull` + `chezmoi apply` (i.e. `chezmoi update`,
+# which never re-runs init and so never reaches .chezmoi.toml.tmpl) would silently
+# strip their nvim/k9s/cisco-vpn configs and their Brewfile.dev/Brewfile.k8s.
+# Hence the full list here — this is NOT the default for new machines.
+#
+# New machines get "core" from home/.chezmoi.toml.tmpl at `chezmoi init`, which
+# writes an explicit features key, after which this file is never consulted again.
+# The two defaults differ on purpose; keep the KNOWN-FEATURE LIST below in sync with
+# $known in that template.
+#
+# Groups (see home/.chezmoiscripts/run_onchange_after_20-install-packages.sh.tmpl):
+#   core  shell only — zsh, tmux, terminfo, prompt, atuin, fzf/ripgrep/bat/eza/…
+#   dev   neovim + LazyVim, lazygit, node, jq, direnv, devcontainer CLI
+#   k8s   k9s (+ its config)
+#   vpn   openconnect + openconnect-saml (the cisco-vpn command)
+#
+# Choose per machine with:  DOTENV_FEATURES=core,dev ./install.sh
+features = ["core", "dev", "k8s", "vpn"]

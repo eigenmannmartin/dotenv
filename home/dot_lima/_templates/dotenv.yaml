@@ -1,0 +1,76 @@
+# dotenv Lima template — an Ubuntu VM that bootstraps this repo on first boot.
+#
+# Referenced as template://dotenv because $LIMA_HOME/_templates is searched first
+# (and shadows bundled templates of the same name). Driven by ~/.local/bin/vm:
+#
+#   vm new scratch                 # core only — shell, nothing else
+#   vm new work --profile dev      # + neovim/lazygit/node
+#   vm new hsg  --profile vpn      # + openconnect/cisco-vpn
+#
+# Every knob is a param, because `limactl --param K=V` is REJECTED unless the
+# template declares K here. Params arrive in provision scripts as $PARAM_<K>.
+minimumLimaVersion: "1.1.0"
+base: template:ubuntu
+
+param:
+  Features: "core"
+  Repo: "https://github.com/eigenmannmartin/dotenv.git"
+  Ref: "main"
+  # Empty = use the instance name, so each VM gets its own atuin history by default.
+  AtuinCtx: ""
+
+provision:
+# Root, before the user script: just enough to fetch the repo. Everything else is
+# the repo's own install.sh, so this list stays short and the logic stays in git.
+- mode: dependency
+  script: |
+    #!/bin/bash
+    set -eu -o pipefail
+    command -v git >/dev/null && command -v curl >/dev/null && exit 0
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends git curl ca-certificates
+
+# Runs as the normal user via `sudo -iu` (a login shell, cwd = home).
+- mode: user
+  script: |
+    #!/bin/bash
+    set -eu -o pipefail
+    SRC="$HOME/.local/share/dotenv"
+    STAMP="$HOME/.local/state/dotenv-provisioned"
+    mkdir -p "$(dirname "$STAMP")" "$HOME/.config/dotenv"
+
+    if [ -d "$SRC/.git" ]; then
+      git -C "$SRC" fetch --prune origin || true
+      git -C "$SRC" checkout "$PARAM_Ref" || true
+      git -C "$SRC" pull --ff-only || true
+    else
+      git clone --branch "$PARAM_Ref" "$PARAM_Repo" "$SRC"
+    fi
+
+    # Per-VM atuin history, read by ~/.zshrc at shell start. Defaults to the
+    # instance name so `vm new hsg` gets a history that is not your laptop's.
+    # Lima sets the guest hostname to lima-<instance>, so strip that prefix —
+    # otherwise every context would be named "lima-…" instead of what you typed.
+    ctx="${PARAM_AtuinCtx:-}"
+    if [ -z "$ctx" ]; then ctx="$(hostname -s)"; ctx="${ctx#lima-}"; fi
+    printf '%s\n' "$ctx" > "$HOME/.config/dotenv/atuin-ctx"
+
+    # install.sh freezes DOTENV_FEATURES into ~/.config/chezmoi/chezmoi.toml, so
+    # later bare `chezmoi apply` runs in this VM keep the same feature set.
+    DOTENV_FEATURES="$PARAM_Features" "$SRC/install.sh"
+    touch "$STAMP"
+
+# A failing provision script does NOT fail `limactl start` — boot.sh only WARNs and
+# still writes the boot-done marker. A readiness probe is the only way the failure
+# reaches the CLI instead of leaving you with a half-built VM that looks fine.
+probes:
+- mode: readiness
+  description: dotenv dotfiles applied
+  script: |
+    #!/bin/bash
+    set -eu
+    test -e "$HOME/.local/state/dotenv-provisioned"
+  hint: |
+    dotfiles provisioning did not finish.
+    Look at /var/log/cloud-init-output.log inside the VM.

@@ -9,8 +9,15 @@ tooling collision — this is a *dotfiles* repo, not env-var loading.)
 A new machine (or a container with `git`):
 
 ```sh
-sh -c "$(curl -fsLS https://get.chezmoi.io)" -- init --apply git@github.com:eigenmannmartin/dotenv.git
+sh -c "$(curl -fsLS https://get.chezmoi.io)" -- -b "$HOME/.local/bin" \
+  init --apply https://github.com/eigenmannmartin/dotenv.git
 ```
+
+Two details that matter on a *fresh* box: `-b ~/.local/bin` puts chezmoi somewhere
+permanent and on `PATH` (the installer otherwise drops it in `./bin`, so the later
+bare `chezmoi apply` would be "command not found" on Linux, where nothing else
+installs chezmoi), and the **https** remote works before any SSH key exists — switch
+the remote to SSH afterwards if you want to push.
 
 …or from a local clone:
 
@@ -22,6 +29,60 @@ chezmoi reads [`.chezmoiroot`](.chezmoiroot) and treats [`home/`](home) as the
 source state (`dot_zshrc` → `~/.zshrc`, etc.). Repo-meta files at the root
 (`README.md`, `install.sh`, `.devcontainer/`, `git/`) are *not* applied to
 `$HOME`.
+
+## Feature profiles
+
+A throwaway VM shouldn't wait for a toolchain it will never use, so installs are
+split into groups. `core` alone — the default — is just the shell:
+
+```sh
+./install.sh                                  # core: zsh, tmux, prompt, atuin, fzf…
+DOTENV_FEATURES=core,dev ./install.sh         # + neovim/LazyVim, lazygit, node, jq
+DOTENV_FEATURES=core,dev,k8s,vpn ./install.sh # everything
+```
+
+| Feature | Adds |
+|---|---|
+| `core` | zsh + plugins, tmux + tpm, terminfo, oh-my-posh, atuin, fzf/ripgrep/bat/eza/zoxide/delta/fd |
+| `dev` | neovim + LazyVim config, lazygit, node, jq, direnv, btop, devcontainer CLI + `dx` (macOS also yq, gh + gh-dash, mise, git-absorb, OrbStack, dust/duf/procs) |
+| `k8s` | k9s + its config (macOS also kubectx/stern/helm/kubecolor) |
+| `vpn` | openconnect + openconnect-saml → the [`cisco-vpn`](#cisco-vpn-entra-id-sso-from-the-lima-vm) command |
+
+The choice is frozen into `~/.config/chezmoi/chezmoi.toml` by
+[`home/.chezmoi.toml.tmpl`](home/.chezmoi.toml.tmpl), so later bare `chezmoi apply`
+runs keep it; re-run `install.sh` with a new `DOTENV_FEATURES` to change it. An
+unknown feature name aborts `init` rather than quietly installing less than asked.
+Machines that predate this split (config with a `sourceDir` and no `[data]`) keep
+getting **everything**, so upgrading can't silently strip a working workstation —
+run `DOTENV_FEATURES=core,dev ./install.sh` there once to opt into a smaller set. Gating
+happens in two places: [`.chezmoiignore`](home/.chezmoiignore) keeps unused *configs*
+from deploying at all (a core-only box never gets `~/.config/nvim`, so LazyVim never
+bootstraps), and the
+[package script](home/.chezmoiscripts/run_onchange_after_20-install-packages.sh.tmpl)
+skips the matching installs. On macOS the same split applies via
+[`Brewfile`](Brewfile) + [`Brewfile.dev`](Brewfile.dev) + [`Brewfile.k8s`](Brewfile.k8s).
+
+## Lima VMs
+
+[`vm`](home/dot_local/bin/executable_vm) builds purpose-specific Lima VMs on the
+Mac, each bootstrapping this repo with the right feature set (Lima itself comes from
+the core [`Brewfile`](Brewfile)):
+
+```sh
+vm new scratch                 # core only — fastest build
+vm new work --profile dev
+vm new hsg  --profile vpn      # the one that needs corporate VPN access
+vm new lab  --profile full --cpus 8 --memory 16 --disk 120
+vm ls | vm shell <name> | vm ssh <name> | vm stop <name> | vm rm <name>
+```
+
+It drives [`~/.lima/_templates/dotenv.yaml`](home/dot_lima/_templates/dotenv.yaml)
+(`$LIMA_HOME/_templates` is searched first, so it resolves as `template://dotenv`),
+passing the profile as a Lima `param`. The VM clones this repo on first boot and
+runs `install.sh` with the matching `DOTENV_FEATURES`. A readiness probe is what
+makes a failed bootstrap actually fail `vm new` — a failing Lima provision script
+otherwise only logs a warning and leaves you with a half-built VM. Each VM also gets
+its own **atuin history**, named after the instance (see below).
 
 ## What's managed today
 
@@ -82,8 +143,10 @@ so a barebones container falls back to the original command:
 
 **Prompt** also gains a **transient prompt** (past lines collapse to a `❯`, red on failure), a **right-prompt** (`✓`/`✗` exit code, exec-time when >2s, clock), and a **kube-context guard** (`⎈ ctx:ns` — peach on a remote cluster, teal on local, hidden when none). **`ssh`** auto-uses `kitten ssh` inside kitty so terminfo/colors work on every remote.
 
-Container & Kubernetes inspection (macOS via [`Brewfile`](Brewfile); `docker`,
-`docker compose` and `kubectl` themselves come from OrbStack):
+Container & Kubernetes inspection — the **`dev`** feature (lazydocker/ctop/dive, via
+[`Brewfile.dev`](Brewfile.dev)) and the **`k8s`** feature (the rest, via
+[`Brewfile.k8s`](Brewfile.k8s)), macOS only; `docker`, `docker compose` and `kubectl`
+themselves come from OrbStack:
 
 | Command | What it does |
 |---|---|
@@ -96,7 +159,8 @@ Container & Kubernetes inspection (macOS via [`Brewfile`](Brewfile); `docker`,
 | `stern` | tail & color-code logs from multiple pods at once |
 | `helm` | install, upgrade & inspect apps packaged as Helm charts |
 
-**More dev tooling:**
+**More dev tooling** — the **`dev`** feature ([`Brewfile.dev`](Brewfile.dev)); on
+Linux only neovim/node/jq/direnv/btop/lazygit arrive, the rest stay macOS-only:
 
 | Command | What it does |
 |---|---|
@@ -108,11 +172,31 @@ Container & Kubernetes inspection (macOS via [`Brewfile`](Brewfile); `docker`,
 | `gwt <branch>` | spin up a linked git **worktree** in a sibling dir (`gwt-rm` removes it) |
 | `dust` / `duf` / `procs` | prettier `du` / `df` / `ps` |
 | `btop` | system monitor (CPU/mem/net/processes) |
+| `cisco-vpn` | Cisco AnyConnect VPN with **Entra ID SSO** from the headless VM — see [below](#cisco-vpn-entra-id-sso-from-the-lima-vm) |
 | kitty `ctrl+shift+p>…` | hints: grab a path (`f`), file:line (`n`), git hash (`h`), or line (`l`) off the screen |
 
 **atuin sync** — shell history syncs to a self-hosted server on the home network.
 Set `sync_address` in [`atuin/config.toml`](home/dot_config/atuin/config.toml), then
-once per machine: `atuin login -u <user> -k <key>` (key/pass in 1Password) + `atuin sync`.
+once per context: `atuin login -u <user> -k <key>` (key/pass in 1Password) + `atuin sync`.
+
+**atuin contexts** — separate, switchable histories out of that one config, so a
+scratch VM or a client project doesn't pollute your main history:
+
+```sh
+atuin-ctx            # which context is this shell in?   (default)
+atuin-ctx ls         # list them
+atuin-ctx work       # switch this shell to "work"
+atuin-ctx -          # back to the default history
+```
+
+Each context is a full store of its own under `~/.local/share/atuin-ctx/<name>` —
+isolation is total, and since each has its own encryption key, `atuin login`/`sync`
+is per-context too (which is what keeps them separate on the server as well). The
+switch rides on `ATUIN_DATA_DIR`, deliberately: it relocates the whole store and is
+the one atuin setting where the environment beats `config.toml`, so unlike
+`ATUIN_DB_PATH` it can't be silently overridden later. A machine's default context
+comes from `~/.config/dotenv/atuin-ctx` — which is what `vm new` writes, giving every
+VM its own history automatically.
 
 ## Dev Containers
 
@@ -144,7 +228,66 @@ How it works:
 VS Code can also bootstrap the dotfiles inside any container: set
 `"dotfiles.repository": "eigenmannmartin/dotenv"`
 (+ `"dotfiles.installCommand": "install.sh"`) in your VS Code settings; the host-only
-bits skip themselves inside containers.
+bits skip themselves inside containers. That path gets the plain `core` default, so
+set `DOTENV_FEATURES` in the container's environment if you want the dev toolchain —
+this repo's own [`.devcontainer/setup.sh`](.devcontainer/setup.sh) defaults itself to
+`core,dev` for exactly that reason. `dx` itself ships only with the `dev` feature,
+since it needs the devcontainer CLI.
+
+## Cisco VPN (Entra ID SSO) from the Lima VM
+
+[`cisco-vpn`](home/dot_local/bin/executable_cisco-vpn.tmpl) connects this *headless*
+VM to a Cisco AnyConnect gateway even though the SAML/Entra ID login needs a browser
+(Linux-only — on the Mac itself a real browser and the Brewfile cover this):
+
+```sh
+cisco-vpn install          # one-time: openconnect (>= 9.00) + vpnc-scripts via apt
+cisco-vpn vpn.example.com  # connect (Ctrl-C disconnects; extra args pass through)
+```
+
+openconnect's **external-browser** SAML flow prints the IdP URL (and drops it on
+the Mac clipboard via OSC 52) instead of spawning a browser, then listens on
+loopback port `29786` for the completion redirect. Lima auto-forwards guest
+listeners to the host, so you open the URL **on the Mac**, log in to Entra ID there
+(MFA and all), and the browser's final `localhost:29786` redirect lands back inside
+the VM.
+Requires the head-end to allow external-browser SAML
+(`authentication saml external-browser`); embedded-webview-only gateways can't do
+console SSO. When the session eventually expires the command exits — rerun it and
+redo the browser login (there's no headless token refresh; brief network drops
+reconnect on their own).
+
+**Embedded-only head-ends** — where plain mode dies with `No SSO handler` because
+the gateway forces the *embedded* AnyConnect webview (e.g. `vpn.unisg.ch`) — use
+the `sso` subcommand, which still runs entirely in the VM:
+
+```sh
+sudo apt install pipx && pipx install openconnect-saml   # one-time
+cisco-vpn sso vpn.unisg.ch/priv
+```
+
+[`openconnect-saml`](https://github.com/mschabhuettl/openconnect-saml) (maintained
+[openconnect-sso](https://github.com/vlaci/openconnect-sso) fork) supplies the
+webview openconnect lacks. Install the base package only — the `[gui]`/`[chrome]`
+extras need a display.
+
+The catch, and why `cisco-vpn sso` does more than shell out: **embedded mode never
+calls back to localhost.** Unlike the external-browser flow, the ASA ends the login
+on its own page (`sso-v2-login-final`) and leaves the token in the *browser* as the
+cookie named by `sso-v2-token-cookie-name` — `acSamlv2Token` on HSG, and not
+HttpOnly. So `cisco-vpn sso` prints the login URL (also OSC 52'd to your clipboard)
+and then relays that cookie into openconnect-saml's waiting callback server, either
+via a **bookmarklet** it prints for you — one click on the Mac, no typing — or from
+a value you paste. openconnect-saml then does the `auth-reply` POST that swaps the
+SAML token for the real `webvpn` session cookie, which is what openconnect consumes.
+The session cookie never hits your terminal.
+
+`cisco-vpn cookie` is the same handoff from a cookie you obtained some other way.
+
+Ctrl-C on an SSO session logs out server-side and burns the cookie — rerun to
+reconnect. And the zero-setup alternative remains: connect on the Mac with Cisco
+Secure Client, since Lima's user-mode networking re-originates guest traffic as
+host traffic, so the VM rides the host tunnel, DNS included.
 
 ## Neovim (LazyVim)
 
@@ -179,21 +322,28 @@ live in `lua/plugins/` (e.g.
 
 ## Dependencies & platforms
 
-`chezmoi apply` installs everything automatically — no separate step:
+`chezmoi apply` installs the packages for the machine's
+[enabled features](#feature-profiles) automatically — no separate step. `core` is
+the default, so a plain apply installs the shell and nothing else:
 
-- **macOS**: Homebrew via [`Brewfile`](Brewfile) (tmux, atuin, oh-my-posh, fzf,
-  ripgrep, bat, eza, zoxide, git-delta, zsh-autosuggestions,
-  fast-syntax-highlighting, neovim + the container/Kubernetes tools, + casks
-  kitty, FiraCode Nerd Font & **OrbStack** for containers). OrbStack replaces
-  Docker Desktop and provides the `docker`/`docker compose`/`kubectl` CLIs; open
-  the app once after install to finish CLI + helper setup.
-- **Debian/Ubuntu**: `apt` for zsh/tmux/git/ripgrep/fzf/bat/neovim (+ `eza`,
-  `zoxide`, `git-delta` on 24.04+) + official installers for atuin & oh-my-posh;
-  kitty + Nerd Font on desktops only (skipped in containers). The
-  container/Kubernetes tools are macOS-only for now — install them via Homebrew
-  or upstream releases on Linux. LazyVim needs Neovim ≥ 0.9 (0.10+ recommended)
-  and a C compiler for treesitter; on older Ubuntu install a newer `nvim` +
-  `build-essential`.
+- **macOS**: Homebrew via [`Brewfile`](Brewfile) (core: tmux, atuin, oh-my-posh,
+  fzf, ripgrep, bat, eza, zoxide, git-delta, fd, the two zsh plugins, + casks
+  kitty & FiraCode Nerd Font, + **lima** for the VMs).
+  [`Brewfile.dev`](Brewfile.dev) adds neovim, node, jq/yq, gh, mise, direnv,
+  lazygit, dust/duf/procs/btop and **OrbStack** + lazydocker/ctop/dive;
+  [`Brewfile.k8s`](Brewfile.k8s) adds k9s/kubecolor/kubectx/stern/helm. OrbStack
+  replaces Docker Desktop and provides the `docker`/`docker compose`/`kubectl`
+  CLIs; open the app once after install to finish CLI + helper setup.
+- **Debian/Ubuntu**: `apt` for the core set — zsh/tmux/git/ripgrep/fzf/bat (+ `eza`,
+  `zoxide`, `git-delta` on 24.04+) — plus official installers for atuin &
+  oh-my-posh; kitty + Nerd Font on desktops only (skipped in containers and on
+  headless VMs). `dev` adds neovim/python3/nodejs/jq/btop/direnv from apt and
+  lazygit from its GitHub release; `k8s` adds k9s the same way; `vpn` adds
+  openconnect + vpnc-scripts + openconnect-saml. **`yq`, `gh`, `mise`,
+  `git-absorb` and the container tools remain macOS-only** — install them from
+  Homebrew-on-Linux or upstream releases if you want them in a VM. LazyVim needs
+  Neovim ≥ 0.9 (0.10+ recommended) and a C compiler for treesitter; on older
+  Ubuntu install a newer `nvim` + `build-essential`.
 - **tpm + tmux plugins**, plus the zsh plugins not in package managers
   (**fzf-tab**, and on Linux autosuggestions + fast-syntax-highlighting), are
   cloned to `~/.local/share` on both. git-delta is wired as git's pager.

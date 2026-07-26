@@ -1,0 +1,74 @@
+{{/*
+  Generates ~/.config/chezmoi/chezmoi.toml. Runs at `chezmoi init` ONLY — never on
+  a bare `chezmoi apply` — so this is where per-machine choices get frozen.
+
+  Must live in home/ (the .chezmoiroot dir). A copy at the repo root is silently
+  ignored: chezmoi reads .chezmoiroot first, and every special file is then
+  resolved relative to the directory it names.
+
+  It MUST emit sourceDir. `chezmoi init` overwrites this config file wholesale
+  (with or without --force), so anything install.sh wrote here beforehand is
+  destroyed — without this line every later bare `chezmoi apply` would fail with
+  "stat ~/.local/share/chezmoi: no such file or directory". This replaces the
+  hand-written config install.sh used to maintain, and fixes the stale-sourceDir
+  case for free: re-running init from a new checkout re-renders it.
+
+  sourceDir is derived from .chezmoi.sourceDir (which .chezmoiroot makes
+  <repo>/home) by stripping one level. NOT .chezmoi.workingTree: that walks up to
+  the nearest enclosing git repo, so a checkout nested inside another repo — a
+  worktree, or ~/code/dotfiles inside a monorepo — would silently point chezmoi at
+  the OUTER repo and apply the wrong tree.
+*/ -}}
+sourceDir = {{ .chezmoi.sourceDir | dir | quote }}
+
+[data]
+{{/*
+  Precedence: DOTENV_FEATURES > this machine's stored choice > legacy > "core".
+
+  "legacy" is the upgrade path and it matters: machines bootstrapped before
+  features existed have a config with sourceDir and no [data] at all. Without this
+  branch they would silently downgrade to core — losing nvim/k9s/cisco-vpn config
+  updates and Brewfile.dev/Brewfile.k8s — and because chezmoi then prints "config
+  file template has changed, run chezmoi init", following that advice would FREEZE
+  core in place. Detect them by "config exists but has no features key" and give
+  them everything, matching what they had before. .chezmoidata.toml carries the
+  same full list for the same reason (it is only consulted when the machine config
+  has no [data], i.e. only by exactly these machines) — that covers the
+  `chezmoi update` path, which never re-runs init and so never reaches this file.
+
+  The literal "core" default for genuinely fresh machines is deliberate:
+  .chezmoidata.toml is NOT loaded while this template renders (verified —
+  referencing .features here aborts init with `map has no entry`), even though it
+  IS available to every other template on apply.
+
+  Deliberately no prompt: init has to work unattended in a Lima provisioning
+  script. (Also, `(env "X") | default (promptOnce ...)` is a trap — Go templates
+  evaluate the argument eagerly, so it prompts even when the env var IS set.)
+*/ -}}
+{{- $known := list "core" "dev" "k8s" "vpn" -}}
+{{- $features := list "core" -}}
+{{- if and (stat .chezmoi.configFile) (not (hasKey . "features")) -}}
+{{-   $features = $known -}}
+{{- else if hasKey . "features" -}}
+{{-   $features = .features -}}
+{{- end -}}
+{{- if env "DOTENV_FEATURES" -}}
+{{-   $parsed := list -}}
+{{/*  Trim each entry: "core, dev" is the obvious thing to type, and without this
+      it yields a " dev" that matches nothing and is then frozen into the config.
+      Unknown names abort init rather than silently installing less than asked. */ -}}
+{{-   range (splitList "," (env "DOTENV_FEATURES")) -}}
+{{-     $f := trim . -}}
+{{-     if $f -}}
+{{-       if not (has $f $known) -}}
+{{-         fail (printf "DOTENV_FEATURES: unknown feature %q (known: %s)" $f (join ", " $known)) -}}
+{{-       end -}}
+{{-       $parsed = append $parsed $f -}}
+{{-     end -}}
+{{-   end -}}
+{{-   if not $parsed -}}
+{{-     fail "DOTENV_FEATURES is set but empty" -}}
+{{-   end -}}
+{{-   $features = $parsed -}}
+{{- end }}
+  features = {{ $features | toJson }}

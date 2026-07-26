@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
 # dotenv: install runtime packages on `chezmoi apply`; idempotent, self-gating in containers.
+#
+# Split into feature groups so a throwaway VM is not made to wait for a toolchain it
+# will never use. Pick them per machine with DOTENV_FEATURES (see .chezmoidata.toml);
+# `core` alone is just the shell, which is what most VMs actually need.
+#
+# The hash line below is load-bearing: run_onchange_ re-runs on a change to the
+# script's RENDERED text, and a feature toggle that only flips template conditionals
+# can leave the output byte-identical — so the script would silently never re-run.
+# features hash: {{ .features | toJson | sha256sum }}
 set -uo pipefail
 
-echo "==> dotenv: installing packages ({{ .chezmoi.os }})"
+{{- $dev := has "dev" .features }}
+{{- $k8s := has "k8s" .features }}
+{{- $vpn := has "vpn" .features }}
+
+echo "==> dotenv: installing packages ({{ .chezmoi.os }}; features: {{ join "," .features }})"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 is_container() {
@@ -20,10 +33,46 @@ is_headless() {
   [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]
 }
 
+# Fetch a binary out of a GitHub release tarball into ~/.local/bin.
+# <owner/repo> <binary> <asset-template>
+#   %V = version, %A = uname-style arch (x86_64|arm64), %G = Go-style arch (amd64|arm64)
+# Projects disagree on the arch token — lazygit ships x86_64, k9s ships amd64 — and
+# getting it wrong is invisible on arm64 (both use "arm64") while 404ing on every
+# Intel box, so each caller states which spelling it needs.
+gh_release_install() {
+  local repo="$1" bin="$2" tmpl="$3" ver arch goarch tmp asset
+  have "$bin" && return 0
+  echo "==> installing $bin"
+  ver="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" \
+    | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
+  [ -n "$ver" ] || { echo "WARN: could not resolve $bin version"; return 0; }
+  case "$(uname -m)" in
+    x86_64|amd64)  arch=x86_64; goarch=amd64 ;;
+    aarch64|arm64) arch=arm64;  goarch=arm64 ;;
+    *)             arch="$(uname -m)"; goarch="$arch" ;;
+  esac
+  asset="${tmpl//%V/$ver}"; asset="${asset//%A/$arch}"; asset="${asset//%G/$goarch}"
+  tmp="$(mktemp -d)"
+  if curl -fLso "$tmp/a.tgz" "https://github.com/$repo/releases/download/v${ver}/${asset}"; then
+    tar -xzf "$tmp/a.tgz" -C "$tmp" "$bin" 2>/dev/null \
+      && install -m755 "$tmp/$bin" "$HOME/.local/bin/$bin" \
+      || echo "WARN: $bin not found in archive"
+  else
+    echo "WARN: $bin download failed"
+  fi
+  rm -rf "$tmp"
+}
+
 {{ if eq .chezmoi.os "darwin" -}}
 if have brew; then
   # --no-upgrade: install only what's missing; don't churn already-installed tools.
-  brew bundle --no-upgrade --file "{{ .chezmoi.workingTree }}/Brewfile" || echo "WARN: brew bundle had failures"
+  # Brewfile.<feature> files are additive; a missing one is simply skipped.
+  for _bf in Brewfile {{ if $dev }}Brewfile.dev{{ end }} {{ if $k8s }}Brewfile.k8s{{ end }}; do
+    _p="{{ .chezmoi.workingTree }}/$_bf"
+    [ -f "$_p" ] || continue
+    brew bundle --no-upgrade --file "$_p" || echo "WARN: brew bundle ($_bf) had failures"
+  done
+  unset _bf _p
 
   # Prune broken zsh completion symlinks (Docker cask rename orphaned _docker links) so compinit doesn't error; -L follows links so only dead ones match.
   _bsf="$(brew --prefix 2>/dev/null)/share/zsh/site-functions"
@@ -40,29 +89,44 @@ fi
 SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
 
 if have apt-get; then
-  export DEBIAN_FRONTEND=noninteractive
   $SUDO apt-get update -qq || true
-  # kitty-terminfo + ncurses-term: ssh forwards $TERM but not terminfo. Without an
-  # xterm-kitty entry, tmux refuses to start outright and OSC 52 (clipboard over ssh)
-  # is unavailable. See 25-terminfo for the no-apt fallbacks.
-  $SUDO apt-get install -y -qq \
-    zsh tmux git curl unzip ca-certificates fontconfig ripgrep fzf bat neovim \
-    kitty-terminfo ncurses-term \
-    python3 direnv nodejs jq btop \
-    || echo "WARN: some apt packages failed to install"
-  # gh/yq/mise/kubecolor/git-absorb/dust/duf/procs vary by release — install via Homebrew-on-Linux or upstream releases.
+  # DEBIAN_FRONTEND via `env`, not `export`: sudo's env_reset strips exported vars,
+  # so the export form never reaches apt/dpkg/needrestart under sudo.
+  apt_install() { $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"; }
 
-  # Install eza/zoxide/delta/fd separately so a per-tool miss can't block the batch above.
+  # core — the shell itself. kitty-terminfo + ncurses-term: ssh forwards $TERM but
+  # not terminfo. Without an xterm-kitty entry, tmux refuses to start outright and
+  # OSC 52 (clipboard over ssh) is unavailable. See 25-terminfo for the fallbacks.
+  apt_install zsh tmux git curl unzip ca-certificates fontconfig \
+    ripgrep fzf bat kitty-terminfo ncurses-term \
+    || echo "WARN: some core apt packages failed to install"
+
+{{ if $dev }}
+  # dev — editor + language runtimes. Biggest single chunk of a full install, and
+  # dead weight on a VM you only ssh into to run one service.
+  apt_install neovim python3 nodejs jq btop direnv \
+    || echo "WARN: some dev apt packages failed to install"
+{{ end }}
+{{ if $vpn }}
+  # vpn — see ~/.local/bin/cisco-vpn. openconnect >= 9.00 (Ubuntu 24.04+ / Debian 12+)
+  # is what supports SSO; vpnc-scripts owns the route/DNS setup.
+  apt_install openconnect vpnc-scripts pipx \
+    || echo "WARN: vpn apt packages failed to install"
+  have openconnect-saml || pipx install openconnect-saml >/dev/null 2>&1 \
+    || echo "WARN: openconnect-saml install failed (needed for embedded-SAML head-ends)"
+{{ end }}
+
+  # Install these separately so a per-tool miss can't block the batch above.
   if ! have eza; then
-    $SUDO apt-get install -y -qq eza 2>/dev/null \
+    apt_install eza 2>/dev/null \
       || echo "WARN: eza not in apt (Ubuntu 24.04+ only) — see https://eza.rocks"
   fi
-  have zoxide || $SUDO apt-get install -y -qq zoxide 2>/dev/null \
+  have zoxide || apt_install zoxide 2>/dev/null \
     || echo "WARN: zoxide not in apt (24.04+) — see https://github.com/ajeetdsouza/zoxide"
-  have delta  || $SUDO apt-get install -y -qq git-delta 2>/dev/null \
+  have delta  || apt_install git-delta 2>/dev/null \
     || echo "WARN: git-delta not in apt — see https://dandavison.github.io/delta"
   # fd: apt package fd-find ships binary fdfind — zshrc aliases fd=fdfind.
-  have fd || have fdfind || $SUDO apt-get install -y -qq fd-find 2>/dev/null \
+  have fd || have fdfind || apt_install fd-find 2>/dev/null \
     || echo "WARN: fd-find not in apt — see https://github.com/sharkdp/fd"
 else
   echo "WARN: apt-get not found; this installer targets Debian/Ubuntu."
@@ -81,22 +145,14 @@ if ! have oh-my-posh; then
     || echo "WARN: oh-my-posh install failed"
 fi
 
-# lazygit — not in apt; pull latest GitHub release tarball (-> ~/.local/bin)
-if ! have lazygit; then
-  echo "==> installing lazygit"
-  LG_VER="$(curl -fsSL https://api.github.com/repos/jesseduffield/lazygit/releases/latest \
-    | grep -oP '"tag_name": *"v\K[^"]+' || true)"
-  if [ -n "$LG_VER" ]; then
-    case "$(uname -m)" in x86_64) a=x86_64;; aarch64|arm64) a=arm64;; *) a="$(uname -m)";; esac
-    tmp="$(mktemp -d)"
-    if curl -fLso "$tmp/lg.tgz" \
-        "https://github.com/jesseduffield/lazygit/releases/download/v${LG_VER}/lazygit_${LG_VER}_Linux_${a}.tar.gz"; then
-      tar -xzf "$tmp/lg.tgz" -C "$tmp" lazygit \
-        && install -m755 "$tmp/lazygit" "$HOME/.local/bin/lazygit"
-    else echo "WARN: lazygit download failed"; fi
-    rm -rf "$tmp"
-  else echo "WARN: could not resolve lazygit version"; fi
-fi
+{{ if $dev }}
+mkdir -p "$HOME/.local/bin"
+gh_release_install jesseduffield/lazygit lazygit 'lazygit_%V_Linux_%A.tar.gz'
+{{ end }}
+{{ if $k8s }}
+mkdir -p "$HOME/.local/bin"
+gh_release_install derailed/k9s k9s 'k9s_Linux_%G.tar.gz'
+{{ end }}
 
 # Desktop-only: kitty + FiraCode Nerd Font. Skipped anywhere without a display —
 # containers AND headless VMs. When you ssh in from kitty on a Mac, the font and the
@@ -149,6 +205,7 @@ if have delta && have git; then
   git config --global merge.conflictStyle zdiff3
 fi
 
+{{ if $k8s }}
 # k9s config.yaml is k9s-managed (rewritten on exit), so patch only our preference keys in place once it exists; yq preferred, python fallback.
 # enableMouse=false on purpose: with it on, k9s grabs the mouse and its reactive refresh wipes any selection — you can't copy.
 # Off, a drag falls through to tmux copy-mode (a frozen snapshot tmux-yank copies cleanly); read/copy structured output via the Shift-D/Y/X/E pager plugins.
@@ -189,11 +246,20 @@ open(p, 'w').write(s)
 PY
   fi
 fi
+{{ end }}
 
+{{ if $dev }}
 if have gh; then
   gh extension list 2>/dev/null | grep -q 'dlvhdr/gh-dash' \
     || gh extension install dlvhdr/gh-dash >/dev/null 2>&1 || true
 fi
+
+# Dev Containers CLI via npm global; Linux may need a writable npm prefix.
+if have npm && ! have devcontainer; then
+  npm install -g @devcontainers/cli >/dev/null 2>&1 \
+    || echo "WARN: devcontainer CLI install failed (npm -g; set a user npm prefix on Linux)"
+fi
+{{ end }}
 
 {{ if eq .chezmoi.os "linux" -}}
 # This repo is zsh-only (~10 KB of ~/.zshrc: prompt, aliases, fzf-tab, tmux autostart).
@@ -216,11 +282,5 @@ if [ "${DOTENV_NO_CHSH:-0}" != "1" ] && have zsh; then
   unset _SUDO _zsh _cur
 fi
 {{ end -}}
-
-# Dev Containers CLI via npm global; Linux may need a writable npm prefix.
-if have npm && ! have devcontainer; then
-  npm install -g @devcontainers/cli >/dev/null 2>&1 \
-    || echo "WARN: devcontainer CLI install failed (npm -g; set a user npm prefix on Linux)"
-fi
 
 echo "==> dotenv: package step done"
