@@ -47,6 +47,8 @@ DOTENV_FEATURES=core,dev,k8s,vpn ./install.sh # everything
 | `dev` | neovim + LazyVim config, lazygit, node, jq, direnv, btop, devcontainer CLI + `dx` (macOS also yq, gh + gh-dash, mise, git-absorb, OrbStack, dust/duf/procs) |
 | `k8s` | k9s + its config (macOS also kubectx/stern/helm/kubecolor) |
 | `vpn` | openconnect + openconnect-saml → the [`cisco-vpn`](#cisco-vpn-entra-id-sso-from-the-lima-vm) command |
+| `ai` | Claude Code + Codex CLIs (`claude`, `codex`), via npm — implies `dev` for node |
+| `docker` | docker engine + compose, so [devcontainers](#dev-containers) run in the VM itself |
 
 The choice is frozen into `~/.config/chezmoi/chezmoi.toml` by
 [`home/.chezmoi.toml.tmpl`](home/.chezmoi.toml.tmpl), so later bare `chezmoi apply`
@@ -74,8 +76,15 @@ vm new work --profile dev
 vm new hsg  --profile vpn               # the one that needs corporate VPN access
 vm new lab  --profile k8s --profile vpn # profiles COMBINE (same as --profile k8s,vpn)
 vm new big  --profile full --cpus 8 --memory 16 --disk 120
+vm new box  --profile ai                # + claude code & codex CLIs (implies dev)
+vm new box  --profile docker            # + a docker engine, for devcontainers in the VM
+vm resize work --cpus 8 --memory 16     # change an existing VM (disk can only grow)
 vm ls | vm shell <name> | vm ssh <name> | vm stop <name> | vm rm <name>
 ```
+
+`vm resize` stops the instance if it is running, edits its config, and starts it again
+— Lima only lets cpus/memory/disk change while the VM is down, and it has no way to
+*shrink* a disk, so asking for less than it has is an error.
 
 `--profile` and `--features` may each be repeated and/or comma-separated; everything
 unions together, de-duplicates, and is emitted in a fixed order, so `k8s vpn` and
@@ -130,13 +139,24 @@ in.
 dotenv-persist            # link everything (runs automatically on every chezmoi apply)
 dotenv-persist status     # shared / local / not created yet
 dotenv-persist add .aws/credentials
+dotenv-persist unshare .config/op   # reverse it; the real file goes back to $HOME
 ```
 
 Shared by default: atuin's `key` + `session`, `gh/hosts.yml`,
-`.claude/.credentials.json`, `.config/op/`, and the 1Password service-account token.
-Deliberately **not** shared: atuin's `history.db` — SQLite over a virtiofs/sshfs
-mount risks corruption, and it doesn't need sharing, since the key and session are
-what let `atuin sync` pull the same history into every VM.
+`.claude/.credentials.json`, and the 1Password service-account token.
+
+Deliberately **not** shared, and worth knowing why:
+
+- atuin's `history.db` — SQLite over a virtiofs/sshfs mount risks corruption, and it
+  doesn't need sharing, since the key and session are what let `atuin sync` pull the
+  same history into every VM.
+- `~/.config/op` — the 1Password CLI **refuses to run** when its config directory is
+  a symlink, and it has a `--config` flag but no environment variable, so there is no
+  way to redirect it for every invocation. It also buys nothing: with a service
+  account the token *is* the credential, and `secrets` reads that file itself.
+
+That second one generalises — share credential **files**, not config **directories**,
+and check that the tool tolerates a symlink before adding one.
 
 Re-run it after a login: some tools replace a file by `rename()`, which swaps out the
 symlink. Re-running re-captures whatever came unlinked — newer file wins, and the one
@@ -244,17 +264,41 @@ itself survives VM rebuilds via [`dotenv-persist`](#logins-that-survive-a-rebuil
 
 ## Dev Containers
 
+**Still worth having, but for a narrower reason than when it was written.** It was
+built to keep an agent's blast radius small: Claude Code on the Mac, the repo's
+commands in a container. [Lima VMs](#lima-vms) now do that job better — the agent
+itself runs in the VM (`vm new work --profile ai --mount ~/code`), so nothing on the
+Mac is exposed, not just the command execution.
+
+What devcontainers still do that a VM does not: give a repo a **pinned, in-repo
+toolchain** that VS Code and your teammates get identically. That is orthogonal to
+isolation, and it is why this stays.
+
+Run them **inside a VM** with the `docker` feature, which installs a real docker engine
+there (the devcontainer CLI shells out to `docker` specifically, so containerd is not a
+substitute):
+
+```sh
+vm new work --profile docker --profile ai --mount ~/code
+vm shell work
+cd ~/code/myrepo && dx npm test
+```
+
 The [`devcontainer`](https://github.com/devcontainers/cli) CLI is installed, and this
-repo ships a [`.devcontainer/`](.devcontainer) so an agent (e.g. Claude Code) running
-**on the host** can run a repo's `git`/build/test commands **inside a container** —
-with commit signing and push that still go through your **host 1Password agent**, no
-key or token ever entering the container.
+repo ships a [`.devcontainer/`](.devcontainer) so a repo's `git`/build/test commands run
+**inside a container** — with commit signing and push that still go through your
+**host 1Password agent**, no key or token ever entering the container.
 
 How it works:
 
-- The container forwards the host SSH agent at `/run/host-services/ssh-auth.sock`
-  (OrbStack / Docker Desktop), exposed as `SSH_AUTH_SOCK`. macOS-only `op-ssh-sign`
-  is absent, so git's default `ssh-keygen` signer signs **through the forwarded
+- The container forwards the host SSH agent, exposed as `SSH_AUTH_SOCK`. Where that
+  socket comes from depends on the engine: OrbStack / Docker Desktop expose the Mac's
+  agent only at their magic `/run/host-services/ssh-auth.sock` (the real socket lives
+  outside their VM and can't be bind-mounted), while a dockerd **inside a Lima VM** can
+  mount the agent socket directly, since `ssh.forwardAgent` has already put it in that
+  VM's filesystem. `dx` detects which case it's in and sets `DEVCONTAINER_SSH_SOCK`;
+  `devcontainer.json` defaults to the magic path. macOS-only `op-ssh-sign` is absent
+  either way, so git's default `ssh-keygen` signer signs **through the forwarded
   agent**; [`.devcontainer/setup.sh`](.devcontainer/setup.sh) wires
   `gpg.format=ssh` + selects your *Github Key* out of the agent.
 - From the host, run repo commands through the **`dx`** wrapper
@@ -343,6 +387,37 @@ host traffic, so the VM rides the host tunnel, DNS included.
 
 To use the tunnel the *other* way — a browser on the Mac reaching intranet sites
 through the VM — see [`vm proxy`](#browse-through-a-vms-vpn).
+
+### Running it as a service
+
+```sh
+cisco-vpn sso vpn.unisg.ch/priv -b   # connect, then detach
+cisco-vpn status [-v]                # interface, routes, DNS, traffic counters
+cisco-vpn suspend                    # drop the tunnel, KEEP the session
+cisco-vpn resume                     # reconnect, no browser
+cisco-vpn stop                       # disconnect AND log out
+cisco-vpn install-service            # resume automatically on boot (systemd)
+```
+
+All of this rides on how openconnect handles signals: **SIGINT/SIGTERM log the session
+off** (the cookie dies with it), **SIGHUP disconnects without logging off** (the cookie
+stays usable), and **SIGUSR1** makes it dump connection stats. So `stop` is a real
+logout, while `suspend` leaves a session you can `resume` without touching a browser.
+The session (host, cookie, fingerprint) is saved to
+`~/.local/state/dotenv/vpn.session`, mode 0600, on the VM's own disk — deliberately
+*not* in the shared login store, since that would hand one VM's VPN session to every
+other VM.
+
+`install-service` is what makes it survive a **reboot**, and it exists for one reason:
+systemd stops services with SIGTERM, which openconnect treats as a clean logout — so
+without a unit that sets `KillSignal=SIGHUP`, rebooting kills the very session you were
+trying to keep. Sessions still expire server-side; when that happens `resume` fails and
+says so, and you redo the SSO login.
+
+`status` reads the tunnel device from `/sys/class/net/<dev>/statistics` and finds the
+process by pid file, falling back to a process scan so a foreground session is still
+visible (it labels which one it found). `-v` additionally sends SIGUSR1 and tails
+openconnect's own report — cipher, DTLS vs TLS, reconnects.
 
 ### Restricting what goes through the tunnel
 

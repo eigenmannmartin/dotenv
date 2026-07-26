@@ -17,8 +17,14 @@
   },
 
   // Forward the host SSH agent (1Password) into the container for signing + push auth.
+  // The socket lives in a different place depending on where the engine runs:
+  //   - OrbStack / Docker Desktop on macOS: only their magic /run/host-services path is
+  //     bind-mountable, since the real socket is on the Mac, outside the engine's VM.
+  //   - dockerd inside a Lima VM: the agent socket is a normal file in that VM (Lima
+  //     forwards it via ssh.forwardAgent), so mount it directly.
+  // `dx` sets DEVCONTAINER_SSH_SOCK for the second case; the default covers the first.
   "mounts": [
-    "source=/run/host-services/ssh-auth.sock,target=/ssh-agent,type=bind"
+    "source=${localEnv:DEVCONTAINER_SSH_SOCK:/run/host-services/ssh-auth.sock},target=/ssh-agent,type=bind"
   ],
   "containerEnv": {
     "SSH_AUTH_SOCK": "/ssh-agent"

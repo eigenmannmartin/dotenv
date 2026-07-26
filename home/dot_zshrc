@@ -62,8 +62,17 @@ fi
 
 # Initialize completions once — after all fpath edits, before the compdef/fzf-tab setup below.
 # (Hoisted out of the Docker block so removing that vendor block can't silently break completion.)
-# ponytail: plain compinit; switch to `compinit -C` to skip the slow security audit if startup drags.
-autoload -Uz compinit && compinit
+#
+# -i, because a group/world-writable directory anywhere in fpath (Homebrew's
+# site-functions is the usual one) otherwise makes compinit BLOCK on an
+# "insecure directories … [y/n]" prompt at every shell start — and in a shell with no
+# terminal it does worse: "not interactive and can't open terminal", then aborts, and
+# you get no completion at all. -i skips just those directories and carries on.
+# The trade is that it is silent, so completions living in an insecure dir go missing
+# without a word. If something stops completing: `compaudit` lists the culprits, and
+# `compaudit | xargs chmod go-w` fixes them for good.
+# Startup dragging? `compinit -C` skips the security check entirely.
+autoload -Uz compinit && compinit -i
 if [[ "$OSTYPE" == darwin* ]]; then
   export PATH=$PATH:/Users/martin/.runai/bin
   # runai prints "Failed to check for CLI updates." onto stdout, polluting the sourced completion; strip it.

@@ -14,6 +14,8 @@ set -uo pipefail
 {{- $dev := has "dev" .features }}
 {{- $k8s := has "k8s" .features }}
 {{- $vpn := has "vpn" .features }}
+{{- $ai := has "ai" .features }}
+{{- $docker := has "docker" .features }}
 
 echo "==> dotenv: installing packages ({{ .chezmoi.os }}; features: {{ join "," .features }})"
 
@@ -61,6 +63,21 @@ gh_release_install() {
     echo "WARN: $bin download failed"
   fi
   rm -rf "$tmp"
+}
+
+# Global npm CLIs (devcontainer, claude, codex). Defined unconditionally because more
+# than one feature needs it.
+npm_global_install() {   # <package> <binary>
+  have "$2" && return 0
+  have npm || { echo "WARN: npm missing — cannot install $1 (needs the 'dev' feature)"; return 0; }
+  echo "==> installing $2"
+  if ! npm install -g "$1" >/dev/null 2>&1; then
+    # A distro node puts its global prefix under /usr, which needs root. Rather than
+    # sudo-installing into system paths, point npm at ~/.local — already on PATH, and
+    # it keeps every global CLI in a directory this user owns.
+    npm config set prefix "$HOME/.local" >/dev/null 2>&1
+    npm install -g "$1" >/dev/null 2>&1 || echo "WARN: $2 install failed (npm -g $1)"
+  fi
 }
 
 {{ if eq .chezmoi.os "darwin" -}}
@@ -114,6 +131,18 @@ if have apt-get; then
     || echo "WARN: vpn apt packages failed to install"
   have openconnect-saml || pipx install openconnect-saml >/dev/null 2>&1 \
     || echo "WARN: openconnect-saml install failed (needed for embedded-SAML head-ends)"
+{{ end }}
+{{ if $docker }}
+  # docker — a container runtime *inside* the VM, so devcontainers (and `dx`) run here
+  # rather than against OrbStack on the Mac. The devcontainer CLI shells out to the
+  # `docker` binary specifically, which is why this is docker.io and not containerd.
+  apt_install docker.io docker-compose-v2 \
+    || echo "WARN: docker apt packages failed to install"
+  if have docker && ! id -nG "$(id -un)" | grep -qw docker; then
+    $SUDO usermod -aG docker "$(id -un)" \
+      && echo "==> added $(id -un) to the docker group — log out and back in for it to apply"
+  fi
+  $SUDO systemctl enable --now docker >/dev/null 2>&1 || true
 {{ end }}
 
   # Install these separately so a per-tool miss can't block the batch above.
@@ -254,11 +283,15 @@ if have gh; then
     || gh extension install dlvhdr/gh-dash >/dev/null 2>&1 || true
 fi
 
-# Dev Containers CLI via npm global; Linux may need a writable npm prefix.
-if have npm && ! have devcontainer; then
-  npm install -g @devcontainers/cli >/dev/null 2>&1 \
-    || echo "WARN: devcontainer CLI install failed (npm -g; set a user npm prefix on Linux)"
-fi
+npm_global_install @devcontainers/cli devcontainer
+{{ end }}
+
+{{ if $ai }}
+# ai — coding agents. Both ship on npm and both are self-updating afterwards, so this
+# only has to bootstrap them. `claude` and `codex` authenticate per machine; the
+# resulting credentials are shared between VMs by dotenv-persist.
+npm_global_install @anthropic-ai/claude-code claude
+npm_global_install @openai/codex codex
 {{ end }}
 
 {{ if eq .chezmoi.os "linux" -}}

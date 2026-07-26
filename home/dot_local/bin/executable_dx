@@ -13,6 +13,15 @@ root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "dx: not inside a 
 [ -e "$root/.devcontainer" ] || { echo "dx: no .devcontainer/ in $root — copy dotenv's as a template" >&2; exit 1; }
 command -v devcontainer >/dev/null || { echo "dx: devcontainer CLI missing (npm i -g @devcontainers/cli)" >&2; exit 1; }
 
+# Where the container should find the 1Password agent. OrbStack/Docker Desktop expose
+# the Mac's agent at a fixed magic path (the real socket is outside their VM and cannot
+# be bind-mounted); a dockerd running inside a Lima VM has no such path, but the agent
+# socket forwarded into that VM is an ordinary file it CAN mount. devcontainer.json
+# falls back to the magic path when this is unset.
+if [ ! -S /run/host-services/ssh-auth.sock ] && [ -S "${SSH_AUTH_SOCK:-}" ]; then
+  export DEVCONTAINER_SSH_SOCK="$SSH_AUTH_SOCK"
+fi
+
 if [ -z "$(docker ps -q -f "label=devcontainer.local_folder=$root" 2>/dev/null)" ]; then
   echo "dx: starting devcontainer for $root …" >&2
   devcontainer up --workspace-folder "$root" >&2

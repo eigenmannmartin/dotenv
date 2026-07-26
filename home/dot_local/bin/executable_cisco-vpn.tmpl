@@ -41,6 +41,19 @@ usage: cisco-vpn install                        one-time: openconnect (>= 9.00) 
        cisco-vpn cookie <host> [fingerprint]    connect with an auth cookie read from stdin
        CISCO_VPN_SERVER=<gateway> cisco-vpn     gateway from the env instead
 
+Running it as a service:
+       cisco-vpn sso <gateway> -b               connect, then detach into the background
+       cisco-vpn status [-v]                    connected? interface, routes, DNS, traffic
+       cisco-vpn suspend                        drop the tunnel but KEEP the session
+       cisco-vpn resume                         reconnect from the saved session, no login
+       cisco-vpn stop                           disconnect AND log out (discards the session)
+       cisco-vpn install-service                resume automatically on boot (systemd)
+
+suspend/resume exist because of how openconnect handles signals: SIGINT logs the
+session off (the cookie dies), SIGHUP does not (the cookie stays usable). So `stop`
+is a real logout, while `suspend` — and a reboot via the systemd unit — leaves a
+session you can resume without touching a browser. Sessions still expire server-side.
+
 The gateway must come first; everything after it is passed through to openconnect
 (e.g. cisco-vpn vpn.example.com --authgroup=Employees). Ctrl-C disconnects.
 
@@ -164,6 +177,59 @@ setup_routes() {
   return 0   # the branches above can end on a failing test; see connect_with_cookie
 }
 
+# ------------------------------------------------------------ session / background
+# openconnect's signals are what make all of this work (see SIGNALS in its man page):
+#   SIGINT/SIGTERM  clean shutdown — LOGS THE SESSION OFF, so the cookie dies with it
+#   SIGHUP          disconnects but does NOT log off — the cookie stays resumable
+#   SIGUSR1         dumps connection info + statistics to openconnect's output
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotenv"
+PID_FILE="$STATE_DIR/vpn.pid"
+LOG_FILE="$STATE_DIR/vpn.log"
+SESSION_FILE="$STATE_DIR/vpn.session"
+
+save_session() {   # <host> <fingerprint> <cookie> <gateway-as-typed>
+  mkdir -p "$STATE_DIR"
+  # Create empty and lock down BEFORE writing: this file holds a live VPN session.
+  ( umask 077; : > "$SESSION_FILE" )
+  {
+    printf 'HOST=%q\n'        "$1"
+    printf 'FINGERPRINT=%q\n' "$2"
+    printf 'COOKIE=%q\n'      "$3"
+    printf 'GATEWAY=%q\n'     "$4"
+  } > "$SESSION_FILE"
+}
+
+# Sets VPN_PID_SOURCE so callers can tell "the session we started" from "some
+# openconnect that happens to be running".
+VPN_PID_SOURCE=""
+vpn_pid() {
+  local p=""
+  if [ -r "$PID_FILE" ]; then
+    p="$(head -1 "$PID_FILE" 2>/dev/null | tr -dc '0-9')"
+    # A stale pid file could otherwise point at whatever process later reused the id.
+    if [ -n "$p" ] && grep -qa openconnect "/proc/$p/cmdline" 2>/dev/null; then
+      VPN_PID_SOURCE=pidfile; printf '%s' "$p"; return 0
+    fi
+  fi
+  # A foreground session (no -b) writes no pid file at all, and `status` from a second
+  # terminal would then report "not connected" over a perfectly live tunnel.
+  p="$(pgrep -x openconnect 2>/dev/null | head -1)"
+  [ -n "$p" ] || return 1
+  VPN_PID_SOURCE=scan; printf '%s' "$p"
+}
+
+# Wait for a signalled openconnect to actually go away, and say so if it does not —
+# reporting "suspended" over a still-live tunnel is worse than reporting nothing.
+await_exit() {  # <pid> <what>
+  local pid="$1" what="$2" i
+  for i in $(seq 1 10); do kill -0 "$pid" 2>/dev/null || return 0; sleep 1; done
+  echo "WARN: pid $pid did not exit after $what — check 'cisco-vpn status'" >&2
+  return 1
+}
+
+# The tunnel openconnect built. Named tun0 in practice, but never assume it.
+vpn_dev() { ip -o link show type tun 2>/dev/null | awk -F': ' 'NR==1{print $2}'; }
+
 # Both cookie paths (sso and `cookie`) connect identically — cookie on stdin, and a
 # UA/version pair mirroring openconnect-sso's, so version-checking DAP policies see a
 # client they know.
@@ -172,19 +238,47 @@ connect_with_cookie() {
   setup_routes
   set -- --cookie-on-stdin --useragent 'AnyConnect Linux_64 4.7.00136' --version-string 4.7.00136
   [ -n "$fp" ] && set -- "$@" --servercert "$fp"
-  $SUDO openconnect --protocol=anyconnect ${ROUTE_ARGS+"${ROUTE_ARGS[@]}"} "$@" "$host"
+  if [ "$BACKGROUND" = 1 ]; then
+    if vpn_pid >/dev/null; then
+      echo "cisco-vpn: already connected (pid $(vpn_pid)) — 'cisco-vpn stop' first" >&2
+      return 1
+    fi
+    mkdir -p "$STATE_DIR"
+    # The redirect is opened by THIS shell, so the log stays owned by us and readable
+    # without sudo even though openconnect goes on to run as root.
+    ( umask 077; : >> "$LOG_FILE" )
+    # -b forks only after the tunnel is up, so a non-zero exit here is a real failure.
+    $SUDO openconnect --protocol=anyconnect -b --pid-file "$PID_FILE" \
+      ${ROUTE_ARGS+"${ROUTE_ARGS[@]}"} "$@" "$host" >>"$LOG_FILE" 2>&1
+    sleep 1
+    vpn_pid >/dev/null || { echo "cisco-vpn: failed to start — see $LOG_FILE" >&2; return 1; }
+    echo "==> cisco-vpn: connected in the background (pid $(vpn_pid)); cisco-vpn status"
+  else
+    $SUDO openconnect --protocol=anyconnect ${ROUTE_ARGS+"${ROUTE_ARGS[@]}"} "$@" "$host"
+  fi
+}
+
+human_bytes() {
+  awk -v b="${1:-0}" 'BEGIN{
+    split("B KiB MiB GiB TiB", u, " "); i = 1
+    while (b >= 1024 && i < 5) { b /= 1024; i++ }
+    printf (i == 1 ? "%d %s" : "%.1f %s"), b, u[i]
+  }'
 }
 
 # Consumed here rather than passed through, in every mode — hence the pre-parse.
 ROUTES="${CISCO_VPN_ROUTES:-}"
 VPN_DNS="${CISCO_VPN_DNS:-on}"
+BACKGROUND="${CISCO_VPN_BACKGROUND:-0}"
 _args=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --routes)     ROUTES="${2:?--routes needs a value}"; shift 2 ;;
-    --routes=*)   ROUTES="${1#*=}"; shift ;;
-    --no-vpn-dns) VPN_DNS=off; shift ;;
-    *)            _args+=("$1"); shift ;;
+    --routes)       ROUTES="${2:?--routes needs a value}"; shift 2 ;;
+    --routes=*)     ROUTES="${1#*=}"; shift ;;
+    --no-vpn-dns)   VPN_DNS=off; shift ;;
+    -b|--background) BACKGROUND=1; shift ;;
+    --foreground)   BACKGROUND=0; shift ;;
+    *)              _args+=("$1"); shift ;;
   esac
 done
 set -- ${_args+"${_args[@]}"}
@@ -227,6 +321,142 @@ install_openconnect() {
 case "${1:-}" in
   -h|--help) usage 0 ;;
   install)   install_openconnect; exit 0 ;;
+
+  status)
+    pid="$(vpn_pid || true)"
+    if [ -z "$pid" ]; then
+      echo "cisco-vpn: not connected"
+      if [ -r "$SESSION_FILE" ]; then
+        # shellcheck disable=SC1090
+        . "$SESSION_FILE"
+        echo "    a saved session for ${GATEWAY:-${HOST:-?}} is present — cisco-vpn resume"
+      fi
+      exit 1
+    fi
+    dev="$(vpn_dev)"
+    up="$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')"
+    printf '==> cisco-vpn: connected (pid %s%s)\n' "$pid" \
+      "${up:+, up $(printf '%dh%02dm%02ds' $((up/3600)) $((up%3600/60)) $((up%60)))}"
+    [ -r "$SESSION_FILE" ] && { . "$SESSION_FILE"; printf '    %-10s %s\n' gateway "${GATEWAY:-${HOST:-?}}"; }
+    if [ -n "$dev" ]; then
+      printf '    %-10s %s  %s  mtu %s\n' interface "$dev" \
+        "$(ip -o -4 addr show dev "$dev" 2>/dev/null | awk '{print $4}' | paste -sd, -)" \
+        "$(cat "/sys/class/net/$dev/mtu" 2>/dev/null)"
+      printf '    %-10s %s\n' routes "$(ip -o route show dev "$dev" 2>/dev/null | awk '{print $1}' | paste -sd' ' - )"
+      printf '    %-10s down %s   up %s\n' traffic \
+        "$(human_bytes "$(cat "/sys/class/net/$dev/statistics/rx_bytes" 2>/dev/null)")" \
+        "$(human_bytes "$(cat "/sys/class/net/$dev/statistics/tx_bytes" 2>/dev/null)")"
+    fi
+    printf '    %-10s %s\n' dns "$(awk '/^nameserver/{print $2}' /etc/resolv.conf 2>/dev/null | paste -sd' ' -)"
+    printf '    %-10s %s\n' session \
+      "$([ -r "$SESSION_FILE" ] && echo 'saved (survives suspend/reboot)' || echo 'none saved')"
+    [ "$VPN_PID_SOURCE" = scan ] && \
+      printf '    %-10s %s\n' note 'found by process scan — started in the foreground, or by something else'
+    # openconnect answers SIGUSR1 by writing its own stats into the log it was
+    # started with — richer than anything we can read from /sys (DTLS vs TLS, cipher,
+    # compression, reconnect count). Only reachable for a backgrounded session.
+    if [ "${2:-}" = "-v" ] || [ "${2:-}" = "--verbose" ]; then
+      if $SUDO kill -USR1 "$pid" 2>/dev/null && [ -r "$LOG_FILE" ]; then
+        sleep 1
+        echo "    --- openconnect ---"
+        tail -12 "$LOG_FILE" | sed 's/^/    /'
+      else
+        echo "    (no log — session was not started with --background)"
+      fi
+    fi
+    exit 0
+    ;;
+
+  stop)
+    pid="$(vpn_pid || true)"
+    [ -n "$pid" ] || { echo "cisco-vpn: not connected"; exit 0; }
+    # SIGINT logs the session OFF, which is the honest meaning of "stop" — but it
+    # also burns the cookie, so the saved session goes with it. Use suspend to keep it.
+    $SUDO kill -INT "$pid" 2>/dev/null || true
+    await_exit "$pid" SIGINT || exit 1
+    $SUDO rm -f "$PID_FILE"
+    rm -f "$SESSION_FILE"
+    echo "==> cisco-vpn: disconnected and logged out (saved session discarded)"
+    exit 0
+    ;;
+
+  suspend)
+    pid="$(vpn_pid || true)"
+    [ -n "$pid" ] || { echo "cisco-vpn: not connected"; exit 0; }
+    # SIGHUP tears the tunnel down without logging off, so the cookie stays valid and
+    # `cisco-vpn resume` can pick it up — after a reboot included.
+    $SUDO kill -HUP "$pid" 2>/dev/null || true
+    await_exit "$pid" SIGHUP || exit 1
+    $SUDO rm -f "$PID_FILE"
+    echo "==> cisco-vpn: suspended, session kept — reconnect with: cisco-vpn resume"
+    exit 0
+    ;;
+
+  resume)
+    [ -r "$SESSION_FILE" ] || { echo "cisco-vpn: no saved session — run 'cisco-vpn sso <gateway>'" >&2; exit 1; }
+    vpn_pid >/dev/null && { echo "cisco-vpn: already connected (pid $(vpn_pid))"; exit 0; }
+    HOST=""; COOKIE=""; FINGERPRINT=""; GATEWAY=""
+    # shellcheck disable=SC1090
+    . "$SESSION_FILE"
+    [ -n "$COOKIE" ] || { echo "cisco-vpn: saved session has no cookie" >&2; exit 1; }
+    have openconnect || install_openconnect
+    echo "==> cisco-vpn: resuming ${GATEWAY:-$HOST} from the saved session"
+    # A cookie the head-end has already expired or logged out fails here; that is not
+    # recoverable without a fresh browser login, so say so plainly.
+    if ! printf '%s' "$COOKIE" | connect_with_cookie "$HOST" "$FINGERPRINT"; then
+      echo "cisco-vpn: resume failed — the session likely expired server-side." >&2
+      echo "           Run: cisco-vpn sso ${GATEWAY:-<gateway>}" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+
+  install-service)
+    # Without this, a reboot is exactly the case the saved session CANNOT survive:
+    # systemd stops everything with SIGTERM, openconnect treats that as a clean
+    # shutdown and logs the session off, and the cookie is dead before you come back.
+    # KillSignal=SIGHUP is the whole point of the unit.
+    have systemctl || { echo "cisco-vpn: no systemd on this box" >&2; exit 1; }
+    unit=/etc/systemd/system/cisco-vpn.service
+    self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    $SUDO tee "$unit" >/dev/null <<EOF
+[Unit]
+Description=cisco-vpn — resume the saved openconnect session
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# forking + PIDFile so systemd tracks openconnect itself (started with -b), not the
+# wrapper script — that is what makes the signal below land on the right process.
+Type=forking
+PIDFile=$PID_FILE
+Environment=HOME=$HOME
+ExecStart=$self resume --background
+# SIGTERM would log the session off and leave nothing to resume. SIGHUP disconnects
+# and keeps it.
+KillSignal=SIGHUP
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    $SUDO systemctl daemon-reload
+    $SUDO systemctl enable cisco-vpn.service >/dev/null 2>&1
+    cat <<EOF
+==> cisco-vpn: installed $unit and enabled it at boot.
+
+    Log in once (cisco-vpn sso <gateway> -b) so a session exists; from then on a
+    reboot suspends rather than logs out, and the tunnel comes back on its own.
+    Sessions still expire server-side — when they do the unit fails and you redo SSO.
+
+      systemctl status cisco-vpn      what systemd thinks
+      cisco-vpn status                what the tunnel is actually doing
+      sudo systemctl disable --now cisco-vpn    undo
+EOF
+    exit 0
+    ;;
+
   sso)
     # Embedded-SAML head-ends ("No SSO handler") — still entirely from this VM.
     # openconnect-saml --headless supplies the webview openconnect lacks, and waits on
@@ -317,7 +547,10 @@ EOF
     eval "$(grep -E '^(HOST|COOKIE|FINGERPRINT)=' "$creds" || true)"
     [ -n "${COOKIE:-}" ] || { echo "cisco-vpn: no cookie returned — SSO did not complete" >&2; exit 1; }
 
-    echo "==> cisco-vpn: SSO complete — connecting to ${HOST:-$gw} (Ctrl-C disconnects)"
+    # Save before connecting: the whole point is to survive the tunnel dying, and a
+    # crash between here and the connect would otherwise lose a perfectly good cookie.
+    save_session "${HOST:-$gw}" "${FINGERPRINT:-}" "$COOKIE" "$gw"
+    echo "==> cisco-vpn: SSO complete — connecting to ${HOST:-$gw}"
     printf '%s' "$COOKIE" | connect_with_cookie "${HOST:-$gw}" "${FINGERPRINT:-}"
     exit $?
     ;;

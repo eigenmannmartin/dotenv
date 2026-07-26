@@ -7,11 +7,14 @@
 #   vm new lab  --profile k8s --profile vpn   profiles COMBINE — so does --profile k8s,vpn
 #   vm new big  --profile full --cpus 8 --memory 16 --disk 120
 #   vm new work --mount ~/code --mount ~/notes:ro     share just these dirs
+#   vm new box  --profile ai              + claude code & codex CLIs
 #   vm proxy hsg                          SOCKS5 on :1080 — browse via that VM's VPN
+#   vm resize work --cpus 8 --memory 16   change a VM after the fact (disk can only grow)
 #   vm ls | vm shell <name> [cmd…] | vm ssh <name> | vm stop <name> | vm rm <name>
 #
 # Profiles map to DOTENV_FEATURES, which is what actually decides the package set:
-#   min core | dev core,dev | k8s core,dev,k8s | vpn core,dev,vpn | full core,dev,k8s,vpn
+#   min core | dev core,dev | k8s +k8s | vpn +vpn | ai +ai | docker +docker | full all
+# (everything except min implies dev)
 # --profile and --features may both be repeated and/or comma-separated; everything
 # unions together and is de-duplicated, so k8s+vpn gives one VM with both.
 #
@@ -23,7 +26,7 @@
 set -euo pipefail
 
 TEMPLATE="${VM_TEMPLATE:-dotenv}"        # ~/.lima/_templates/dotenv.yaml
-KNOWN_FEATURES="core dev k8s vpn"        # keep in sync with home/.chezmoi.toml.tmpl
+KNOWN_FEATURES="core dev k8s vpn ai docker"   # keep in sync with home/.chezmoi.toml.tmpl
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dotenv"
 MOUNTS_FILE="$CONFIG_DIR/vm-mounts"
 DEFAULT_PERSIST="${XDG_DATA_HOME:-$HOME/.local/share}/dotenv/vm-logins"
@@ -51,8 +54,12 @@ add_profile() {
     dev)       add_feature core; add_feature dev ;;
     k8s)       add_feature core; add_feature dev; add_feature k8s ;;
     vpn)       add_feature core; add_feature dev; add_feature vpn ;;
-    full|all)  add_feature core; add_feature dev; add_feature k8s; add_feature vpn ;;
-    *)         die "unknown profile '$1' (min|dev|k8s|vpn|full)" ;;
+    # ai brings dev with it: both CLIs install through npm, which the dev feature is
+    # what puts on the box.
+    ai)        add_feature core; add_feature dev; add_feature ai ;;
+    docker)    add_feature core; add_feature dev; add_feature docker ;;
+    full|all)  for _f in $KNOWN_FEATURES; do add_feature "$_f"; done ;;
+    *)         die "unknown profile '$1' (min|dev|k8s|vpn|ai|docker|full)" ;;
   esac
 }
 
@@ -196,6 +203,28 @@ case "$cmd" in
     limactl start --tty=false "$@" "template://$TEMPLATE"
     echo
     echo "==> vm: '$name' ready — enter it with: vm shell $name"
+    ;;
+
+  resize)
+    # cpus/memory/disk are baked into the instance yaml at creation, so changing them
+    # means editing that yaml — which Lima only allows while the instance is stopped.
+    # Disk can only GROW; Lima has no way to shrink one, so ask for less and it errors.
+    [ $# -ge 1 ] || die "usage: vm resize <name> [--cpus N] [--memory GiB] [--disk GiB]"
+    name="$1"; shift
+    [ $# -gt 0 ] || die "nothing to change (--cpus / --memory / --disk)"
+    set -- --tty=false "$@"
+    was_running=0
+    limactl list --format '{{.Name}} {{.Status}}' 2>/dev/null | grep -qx "$name Running" && was_running=1
+    if [ "$was_running" = 1 ]; then
+      echo "==> vm: stopping '$name' to resize it"
+      limactl stop "$name"
+    fi
+    limactl edit "$name" "$@"
+    if [ "$was_running" = 1 ]; then
+      echo "==> vm: restarting '$name'"
+      limactl start "$name"
+    fi
+    echo "==> vm: '$name' resized"
     ;;
 
   ls|list)   limactl list "$@" ;;

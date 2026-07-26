@@ -45,10 +45,16 @@ sourceDir = {{ .chezmoi.sourceDir | dir | quote }}
   script. (Also, `(env "X") | default (promptOnce ...)` is a trap — Go templates
   evaluate the argument eagerly, so it prompts even when the env var IS set.)
 */ -}}
-{{- $known := list "core" "dev" "k8s" "vpn" -}}
+{{/*
+  $known is the validation set; $legacy is what a pre-features machine used to have.
+  They are separate on purpose — folding a NEW feature into the legacy default would
+  silently install it on every old machine on the next `chezmoi update`.
+*/ -}}
+{{- $known := list "core" "dev" "k8s" "vpn" "ai" "docker" -}}
+{{- $legacy := list "core" "dev" "k8s" "vpn" -}}
 {{- $features := list "core" -}}
 {{- if and (stat .chezmoi.configFile) (not (hasKey . "features")) -}}
-{{-   $features = $known -}}
+{{-   $features = $legacy -}}
 {{- else if hasKey . "features" -}}
 {{-   $features = .features -}}
 {{- end -}}

@@ -5,11 +5,12 @@
 # host directory (default ~/.local/share/dotenv/vm-logins, path recorded in
 # ~/.config/dotenv/persist-dir) and this replaces the credential files in $HOME with
 # symlinks into it. Log in once, on any VM, and every VM after that is already
-# logged in — atuin, gh, claude, op.
+# logged in — atuin, gh, claude, and the 1Password service-account token.
 #
-#   dotenv-persist            link everything (idempotent; safe to re-run)
-#   dotenv-persist status     show what is shared, local, or not yet created
-#   dotenv-persist add PATH   also share $HOME/PATH from now on
+#   dotenv-persist              link everything (idempotent; safe to re-run)
+#   dotenv-persist status       show what is shared, local, or not yet created
+#   dotenv-persist add PATH     also share $HOME/PATH from now on
+#   dotenv-persist unshare PATH stop sharing it and put the real file back
 #
 # Re-run it after a login: a few tools replace a file by rename(), which swaps out
 # our symlink. This re-captures anything that came unlinked — the newer of the two
@@ -28,12 +29,19 @@ die() { echo "dotenv-persist: $*" >&2; exit 1; }
 
 # Paths are relative to $HOME. A trailing / means "link the whole directory", which
 # is the robust choice when a tool rewrites files inside it atomically.
+#
+# NOT here on purpose: ~/.config/op. The 1Password CLI refuses to run at all when its
+# config directory is a symlink ("we can't safely access ... because it's a symbolic
+# link"), and it has a --config flag but no env var, so there is no way to point it
+# elsewhere for every invocation. It costs nothing to leave out: with a service
+# account the token below IS the credential, and `secrets` reads that itself, so op
+# never looks at a shared path. Check for this before adding any config directory —
+# credential *files* are the safe thing to share.
 DEFAULT_PATHS='
 .local/share/atuin/key
 .local/share/atuin/session
 .config/gh/hosts.yml
 .claude/.credentials.json
-.config/op/
 .config/dotenv/op-service-account-token
 '
 
@@ -149,6 +157,32 @@ EOF
     echo "==> added $rel to $LIST_FILE"
     ;;
 
-  -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$1' (link|status|add)" ;;
+  unshare)
+    # For paths a tool turns out to reject as a symlink (see ~/.config/op above), and
+    # for anything you would rather keep VM-local. The shared copy is moved back into
+    # $HOME so nothing is lost; other VMs stop seeing updates to it.
+    rel="${2:?usage: dotenv-persist unshare <path relative to \$HOME>}"; rel="${rel%/}"
+    safe_rel "$rel" || die "'$rel' must be relative to \$HOME and must not contain '..'"
+    src="$HOME/$rel"; dst="$PERSIST/$rel"
+    [ -L "$src" ] || die "$rel is not a shared symlink"
+    rm -f "$src"
+    if [ -e "$dst" ]; then
+      mkdir -p "$(dirname "$src")"
+      mv "$dst" "$src"
+      echo "==> moved $rel out of the shared store and back into \$HOME"
+    else
+      echo "==> removed the $rel link (the shared store had nothing behind it)"
+    fi
+    # Only touch the list if it exists; otherwise the defaults still apply and the
+    # entry may simply no longer be one of them.
+    if [ -r "$LIST_FILE" ]; then
+      # || true: grep exits 1 when it selects nothing, which would leave the tmp file
+      # behind and skip the mv.
+      { grep -vxF "$rel" "$LIST_FILE" || true; } > "$LIST_FILE.tmp"
+      mv "$LIST_FILE.tmp" "$LIST_FILE"
+    fi
+    ;;
+
+  -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$1' (link|status|add|unshare)" ;;
 esac
