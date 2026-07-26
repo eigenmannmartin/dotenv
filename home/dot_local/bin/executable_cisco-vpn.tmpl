@@ -1,0 +1,245 @@
+{{ if ne .chezmoi.os "darwin" -}}
+#!/usr/bin/env bash
+# cisco-vpn — Cisco AnyConnect VPN with Entra ID (SAML) SSO, from this *headless* Lima VM.
+# LINUX ONLY: like pbcopy, this is a chezmoi template that renders empty on darwin —
+# a Mac has a real browser (and Cisco Secure Client), so the console dance below is
+# pointless there, and macOS packages belong in the Brewfile anyway.
+#
+# Why this works with no browser in the VM: openconnect >= 9.00 speaks the AnyConnect
+# "external browser" SAML flow (--external-browser). It hands the IdP URL to a
+# "browser" executable (exec'd directly, URL as $1 — a shell script works) and
+# listens on loopback port 29786 ([::1] on 9.12) for the completion redirect. Lima
+# auto-forwards every guest loopback listener — ::1 included — to 127.0.0.1 on the
+# macOS host, so the URL is opened in Safari/Chrome ON THE MAC, Entra ID (incl.
+# MFA/Conditional Access) runs there, and the browser's final localhost:29786
+# redirect lands back inside the VM, straight into openconnect. Our "browser" is a
+# stub that prints the URL — and drops it on the Mac clipboard through the pty
+# (osc52-copy), so it's a Cmd-V away. Inside tmux, prefix+Tab (extrakto) also grabs
+# it off the screen. Even if the stub failed, openconnect prints the URL itself and
+# keeps listening. (On a non-Lima remote box the same flow works — bridge the
+# redirect yourself with: ssh -L 29786:localhost:29786 <box>.)
+#
+# Server-side requirement: the ASA/FTD tunnel-group must allow external-browser SAML
+# ("authentication saml external-browser", ASA 9.17(1)+/FTD 7.1+). Head-ends locked
+# to the default *embedded* webview flow abort with "No SSO handler" on the CLI —
+# console SSO can't work there (that flow needs a GUI webview, e.g. openconnect-sso).
+set -euo pipefail
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+usage() {
+  cat <<'EOF'
+usage: cisco-vpn install                        one-time: openconnect (>= 9.00) + vpnc-scripts
+       cisco-vpn <gateway> [openconnect args]   connect; SSO URL opens in a browser ON YOUR MAC
+       cisco-vpn sso <gateway> [saml args]      same, for *embedded*-SAML head-ends
+       cisco-vpn cookie <host> [fingerprint]    connect with an auth cookie read from stdin
+       CISCO_VPN_SERVER=<gateway> cisco-vpn     gateway from the env instead
+
+The gateway must come first; everything after it is passed through to openconnect
+(e.g. cisco-vpn vpn.example.com --authgroup=Employees). Ctrl-C disconnects.
+
+Use `sso` when plain mode dies with "No SSO handler" (e.g. vpn.unisg.ch): it drives
+the login through openconnect-saml --headless, which prints a URL you open on the
+Mac exactly like the native flow. One-time: pipx install openconnect-saml.
+
+`cookie` is the manual variant — authenticate anywhere (incl. on the Mac with
+`openconnect-saml --authenticate`), then pipe the cookie in:
+  echo "$COOKIE" | cisco-vpn cookie "$HOST" "$FINGERPRINT"
+EOF
+  exit "${1:-0}"
+}
+
+SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+
+install_openconnect() {
+  if have apt-get; then
+    $SUDO apt-get update -qq || true
+    # DEBIAN_FRONTEND via `env`, not `export`: sudo's env_reset strips exported vars,
+    # so the export form silently never reaches apt/dpkg/needrestart under sudo.
+    # vpnc-scripts is a hard dep of the deb, but name it: it owns routes/DNS setup.
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openconnect vpnc-scripts \
+      || { echo "cisco-vpn: apt install of openconnect failed" >&2; exit 1; }
+  else
+    echo "cisco-vpn: apt-get not found; this installer targets Debian/Ubuntu" >&2
+    echo "           (any openconnect >= 9.00 with vpnc-script works — install manually)" >&2
+    exit 1
+  fi
+
+  # Probe the capability, not just the version: SSO needs --external-browser
+  # (openconnect >= 9.00; Ubuntu 22.04 still ships 8.20). No usable binary
+  # fallback exists, so say so now instead of failing mid-login later.
+  # NB: `openconnect --help` exits 1 by design — don't test it through pipefail.
+  case "$(openconnect --help 2>&1 || true)" in
+    *--external-browser*) ;;
+    *)
+      echo "WARN: this openconnect ($(openconnect --version 2>/dev/null | head -1)) lacks" >&2
+      echo "      --external-browser — SSO needs >= 9.00 (Ubuntu 24.04+: 9.12, Debian 12+: 9.01+)." >&2
+      ;;
+  esac
+
+  # Lima kernels ship tun built-in; probe anyway so a missing module fails here,
+  # with a name, and not mid-connect.
+  [ -e /dev/net/tun ] || $SUDO modprobe tun 2>/dev/null \
+    || echo "WARN: /dev/net/tun missing — openconnect cannot create the tunnel" >&2
+
+  echo "==> cisco-vpn: $(openconnect --version | head -1) ready"
+  echo "    connect with: cisco-vpn <vpn-gateway>"
+}
+
+case "${1:-}" in
+  -h|--help) usage 0 ;;
+  install)   install_openconnect; exit 0 ;;
+  sso)
+    # Embedded-SAML head-ends ("No SSO handler") — still entirely from this VM.
+    # openconnect-saml --headless supplies the webview openconnect lacks. Its
+    # scripted-HTTPS path can't drive Entra (the login URL 303s straight to
+    # login.microsoftonline.com, so there is no form to fill), so it falls back to a
+    # callback server. But in EMBEDDED mode nothing ever redirects to that callback:
+    # the ASA ends the flow on its own page (sso-v2-login-final) and leaves the token
+    # in the *browser* as the cookie named by sso-v2-token-cookie-name
+    # (acSamlv2Token on HSG). Verified against vpn.unisg.ch: no <sso-v2-browser-mode>
+    # is ever sent, so the localhost:29786 handoff the native flow relies on is
+    # simply not on offer — the callback server can only be fed by hand.
+    # Hence the relay below: the cookie is NOT HttpOnly, so a bookmarklet on the Mac
+    # can post it to the callback (Lima forwards the port), or you paste it here.
+    # openconnect-saml then does the auth-reply POST that swaps that token for the
+    # real webvpn session cookie, which is what openconnect actually needs.
+    shift
+    [ $# -ge 1 ] || { echo "cisco-vpn: sso mode needs <gateway>" >&2; usage 2 >&2; }
+    gw="$1"; shift
+    have openconnect-saml || {
+      echo "cisco-vpn: openconnect-saml missing — install it with:" >&2
+      echo "           sudo apt-get install -y pipx && pipx install openconnect-saml" >&2
+      echo "           (base package only: the [gui]/[chrome] extras need a display)" >&2
+      exit 1
+    }
+    have openconnect || { echo "==> cisco-vpn: openconnect missing — installing first"; install_openconnect; }
+
+    creds="$(mktemp "${TMPDIR:-/tmp}/cisco-vpn-creds.XXXXXX")"   # mktemp -> 0600
+    trap 'rm -f "$creds"' EXIT
+    # PYTHONUNBUFFERED: Python block-buffers when stdout is a pipe, which would hide
+    # the login URL until after the callback had already timed out. Backgrounded so
+    # we can relay a pasted token while its callback server is still listening; no
+    # --user is passed, so it never competes with us for the terminal.
+    PYTHONUNBUFFERED=1 openconnect-saml --server "$gw" --headless --authenticate "$@" >"$creds" 2>&1 &
+    saml_pid=$!
+
+    # Wait for the login URL (and the callback port it chose — 29786 unless taken).
+    login_url=""; cb_url=""
+    for _ in $(seq 1 60); do
+      kill -0 "$saml_pid" 2>/dev/null || break
+      login_url="$(grep -oE 'https://[^ ]+saml[^ ]*' "$creds" | head -1 || true)"
+      cb_url="$(grep -oE 'http://127\.0\.0\.1:[0-9]+' "$creds" | head -1 || true)"
+      [ -n "$login_url" ] && [ -n "$cb_url" ] && break
+      sleep 1
+    done
+    cb_port="${cb_url##*:}"
+
+    if [ -n "$login_url" ]; then
+      sso_osc52="$(command -v osc52-copy || true)"
+      [ -n "$sso_osc52" ] && printf '%s' "$login_url" | "$sso_osc52" 2>/dev/null || true
+      cat <<EOF
+
+=========================== SSO login (embedded SAML) ===========================
+1. Open this URL in a browser ON YOUR MAC (it is also on your clipboard):
+
+   $login_url
+
+2. Sign in. You land on a page saying you may close the tab — do NOT close it yet:
+   the token is now a cookie there, and nothing sends it back automatically.
+3. Hand the token over, either way:
+   a) click a bookmarklet saved on the Mac with this as its URL (one click, no typing):
+
+   javascript:(function(){var m=document.cookie.match(/acSamlv2Token=([^;]*)/);if(!m){alert('acSamlv2Token not found - are you on the vpn page?');return}location='http://localhost:$cb_port/callback?acSamlv2Token='+encodeURIComponent(m[1])})()
+
+   b) or read it out (DevTools console: document.cookie) and paste it below.
+================================================================================
+EOF
+      # Poll instead of a plain read: the bookmarklet may complete the login for us,
+      # in which case openconnect-saml exits and there is nothing left to paste.
+      token=""
+      printf 'Paste acSamlv2Token here (or just wait, if you used the bookmarklet): '
+      while kill -0 "$saml_pid" 2>/dev/null; do
+        if read -r -t 5 token </dev/tty 2>/dev/null && [ -n "$token" ]; then
+          curl -sG --data-urlencode "acSamlv2Token=$token" "$cb_url/callback" >/dev/null 2>&1 \
+            && echo "==> token relayed to the local callback server" \
+            || echo "WARN: could not reach $cb_url — did the login time out?" >&2
+          break
+        fi
+      done
+      echo
+    fi
+
+    wait "$saml_pid" || true
+    grep -v -E '^(HOST|COOKIE|FINGERPRINT)=' "$creds" | tail -5    # cookie stays off-screen
+
+    # Values are shlex-quoted by openconnect-saml; eval is its documented consumption.
+    eval "$(grep -E '^(HOST|COOKIE|FINGERPRINT)=' "$creds" || true)"
+    [ -n "${COOKIE:-}" ] || { echo "cisco-vpn: no cookie returned — SSO did not complete" >&2; exit 1; }
+
+    set -- --cookie-on-stdin --useragent 'AnyConnect Linux_64 4.7.00136' --version-string 4.7.00136
+    [ -n "${FINGERPRINT:-}" ] && set -- "$@" --servercert "$FINGERPRINT"
+    echo "==> cisco-vpn: SSO complete — connecting to ${HOST:-$gw} (Ctrl-C disconnects)"
+    printf '%s' "$COOKIE" | $SUDO openconnect --protocol=anyconnect "$@" "${HOST:-$gw}"
+    exit $?
+    ;;
+
+  cookie)
+    # Embedded-SAML escape hatch: the browser part already happened on the Mac
+    # (openconnect-sso --authenticate printed HOST/COOKIE/FINGERPRINT); we only
+    # consume the cookie here. The UA/version pair mirrors what openconnect-sso
+    # itself connects with, so version-checking DAP policies see a known client.
+    # NB: Ctrl-C logs the session out server-side and BURNS the cookie; a plain
+    # network drop (or SIGHUP) keeps it reusable.
+    shift
+    [ $# -ge 1 ] || { echo "cisco-vpn: cookie mode needs <host> [fingerprint]" >&2; usage 2 >&2; }
+    host="$1"; fp="${2:-}"
+    have openconnect || { echo "==> cisco-vpn: openconnect missing — installing first"; install_openconnect; }
+    set -- --cookie-on-stdin --useragent 'AnyConnect Linux_64 4.7.00136' --version-string 4.7.00136
+    [ -n "$fp" ] && set -- "$@" --servercert "$fp"
+    echo "==> cisco-vpn: connecting to $host with handed-over cookie (Ctrl-C disconnects)"
+    exec $SUDO openconnect --protocol=anyconnect "$@" "$host"
+    ;;
+esac
+
+# First non-flag arg is the gateway; anything else passes through to openconnect.
+server="${CISCO_VPN_SERVER:-}"
+if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then server="$1"; shift; fi
+[ -n "$server" ] || { echo "cisco-vpn: no gateway given (arg or \$CISCO_VPN_SERVER)" >&2; usage 2 >&2; }
+
+have openconnect || { echo "==> cisco-vpn: openconnect missing — installing first"; install_openconnect; }
+
+# The "browser" openconnect launches: print the URL + best-effort OSC 52 copy to the
+# Mac clipboard. Generated fresh per run because openconnect execs it as root with no
+# shell and outside our PATH — so it must be a real file with absolute paths baked in.
+osc52="$(command -v osc52-copy || true)"
+helper="$(mktemp "${TMPDIR:-/tmp}/cisco-vpn-browser.XXXXXX")"
+trap 'rm -f "$helper"' EXIT
+cat >"$helper" <<EOF
+#!/bin/sh
+# Invoked by openconnect with the SSO URL as \$1 (stdout arrives on its stderr).
+printf '\n================================ SSO login ================================\n'
+printf 'Open this URL in a browser ON YOUR MAC (not in the VM):\n\n%s\n\n' "\$1"
+printf 'Entra ID login runs there; the final http://localhost:29786/ redirect is\n'
+printf 'forwarded by Lima back into this VM to complete authentication.\n'
+printf '===========================================================================\n\n'
+[ -x "$osc52" ] && printf '%s' "\$1" | "$osc52" 2>/dev/null \
+  && printf '(URL is also on your Mac clipboard — OSC 52.)\n\n'
+exit 0
+EOF
+chmod 755 "$helper"
+
+# Troubleshooting:
+#  - "No SSO handler"        -> head-end only allows *embedded* SAML (e.g. vpn.unisg.ch);
+#                               use `cisco-vpn cookie` (see --help), or connect on the
+#                               Mac instead — Lima's user-mode net rides the host VPN.
+#  - 404 right after connect -> some ASA DAP policies match the User-Agent; retry
+#                               with: --useragent='AnyConnect Linux_64 4.10.05095'
+#                               (openconnect's default already contains "AnyConnect").
+#  - exits after hours up    -> the session cookie expired or the head-end ended the
+#                               session; that's fatal by design (no headless token
+#                               refresh) — rerun cisco-vpn and redo the browser login.
+#                               Brief network drops reconnect on their own.
+echo "==> cisco-vpn: connecting to $server (Ctrl-C disconnects)"
+$SUDO openconnect --protocol=anyconnect --external-browser="$helper" "$@" "$server"
+{{ end -}}
