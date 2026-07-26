@@ -162,8 +162,14 @@ dotenv-persist add .aws/credentials
 dotenv-persist unshare .config/op   # reverse it; the real file goes back to $HOME
 ```
 
-Shared by default: atuin's `key` + `session`, `gh/hosts.yml`,
-`.claude/.credentials.json`, and the 1Password service-account token.
+Shared by default: atuin's `key` + `session`, `gh/hosts.yml`, your git identity
+(`~/.config/git/identity` — see below), the 1Password service-account token, and three
+files for Claude Code —
+`.claude/.credentials.json` (the OAuth tokens), `.claude.json` (account, onboarding
+state, and the per-project list `/resume` is built from) and `.claude/projects/` (the
+session transcripts). All three, because with only the credentials shared a new VM
+came up logged in but re-ran onboarding with an empty `/resume`, which is
+indistinguishable from having lost the login.
 
 Deliberately **not** shared, and worth knowing why:
 
@@ -178,9 +184,23 @@ Deliberately **not** shared, and worth knowing why:
 That second one generalises — share credential **files**, not config **directories**,
 and check that the tool tolerates a symlink before adding one.
 
-Re-run it after a login: some tools replace a file by `rename()`, which swaps out the
-symlink. Re-running re-captures whatever came unlinked — newer file wins, and the one
-that loses is kept as `.dotenv-bak` rather than deleted.
+**git identity.** A fresh VM used to fail its first commit with *"Author identity
+unknown"*, and a `git config --global user.email` set to fix it lasted exactly until
+the next `vm rm`. So `vm new` copies the host's `user.name`/`user.email` into
+`~/.config/git/identity` in the store (once — after that the file is yours), the
+installer adds an `include.path` for it to `~/.gitconfig`, and dotenv-persist links it
+into every VM. Included rather than copied, so editing that one file changes every box.
+Only the identity, not the whole `~/.gitconfig`: that file points commit signing at
+`/Applications/1Password.app`, which does not exist in a Linux guest.
+
+`~/.zshrc` re-runs it (quietly, in the background) on every shell start, and you can
+re-run it by hand any time. That matters because atuin, `gh` and `claude` all replace
+a credential by `rename()`, which swaps out the symlink for a real file — after which
+the token they just refreshed lives in this VM alone and `vm rm` takes it with it.
+Re-running re-captures whatever came unlinked — newer file wins, and the one that
+loses is kept as `.dotenv-bak` rather than deleted. Waiting to be told to re-run was
+never going to work: `claude` rotates its OAuth token mid-session, hours after any
+login, without saying so.
 
 ## What's managed today
 
@@ -632,7 +652,9 @@ the default, so a plain apply installs the shell and nothing else:
   `zoxide`, `git-delta` on 24.04+) — plus official installers for atuin &
   oh-my-posh; kitty + Nerd Font on desktops only (skipped in containers and on
   headless VMs) — atuin is symlinked into `~/.local/bin`, since its installer drops
-  it in `~/.atuin/bin`, which only `~/.zshrc` ever puts on PATH. `devlite` adds
+  it in `~/.atuin/bin`, which only `~/.zshrc` ever puts on PATH; it is run with
+  `--non-interactive`, without which it probes for a tty via `exec 3</dev/tty` and
+  dies silently under dash during `vm new`, where there isn't one. `devlite` adds
   neovim/python3/nodejs/jq/btop/direnv from apt and lazygit from its GitHub release;
   `dev` adds lazydocker + dive the same way (no OrbStack — macOS only — so pair it
   with `docker` for an engine); `k8s` adds k9s the same way; `vpn` adds

@@ -99,6 +99,13 @@ unset _op_sock
 # XDG: make lazygit & friends read ~/.config (macOS defaults elsewhere otherwise)
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 
+# Re-capture credentials that came unlinked from the shared store. atuin, gh and
+# claude all rewrite theirs by rename(), which replaces dotenv-persist's symlink with
+# a real file in this VM — after which the refreshed token is no longer shared and
+# `vm rm` takes it with it. Backgrounded so a slow host mount can't stall the prompt;
+# a no-op (and instant) on any box without a persist dir, i.e. every Mac.
+[ -x "$HOME/.local/bin/dotenv-persist" ] && ("$HOME/.local/bin/dotenv-persist" link >/dev/null 2>&1 &)
+
 # atuin — one shared history, synced from the server. Every box (VM included) sees
 # the same commands once `secrets login atuin` has run; the login itself survives a
 # rebuild via ~/.local/bin/dotenv-persist.

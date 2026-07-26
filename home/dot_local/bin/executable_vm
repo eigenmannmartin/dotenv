@@ -43,6 +43,39 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotenv"   # proxy control socke
 have() { command -v "$1" >/dev/null 2>&1; }
 die()  { echo "vm: $*" >&2; exit 1; }
 
+# Copy this machine's git identity into the shared login store, once. Nothing else
+# ever put one in a VM: the installer writes delta settings to ~/.gitconfig but no
+# user.name/user.email, so the first `git commit` in a fresh box died with "Author
+# identity unknown" — and setting it there by hand lasted exactly until `vm rm`.
+#
+# A separate fragment rather than the whole ~/.gitconfig, because that file is not
+# portable: it points commit signing at /Applications/1Password.app, which does not
+# exist in a Linux guest. dotenv-persist links this one into every VM and the
+# installer includes it from ~/.gitconfig; edit it once to change every box.
+seed_git_identity() {
+  local dir="$1" ident="$1/.config/git/identity" name email
+  [ -e "$ident" ] && return 0
+  have git || return 0
+  # --includes, because given an explicit file (--global) git reads that file ALONE
+  # and does not follow its include directives. Without it, a host whose identity
+  # lives in an included fragment — which is exactly what this repo sets up — reads
+  # back as having no identity at all.
+  name="$(git config --global --includes user.name 2>/dev/null || true)"
+  email="$(git config --global --includes user.email 2>/dev/null || true)"
+  # Half an identity is still worth seeding — git only refuses when it has neither.
+  [ -n "$name$email" ] || { echo "vm: no git identity on this machine — VMs will need 'git config --global user.email …'" >&2; return 0; }
+  mkdir -p "$(dirname "$ident")"
+  {
+    echo "# Seeded by 'vm new' from the host's git identity, and shared with every VM"
+    echo "# by dotenv-persist. Edit here to change it on all of them at once."
+    echo "[user]"
+    [ -n "$name" ]  && printf '\tname = %s\n' "$name"
+    [ -n "$email" ] && printf '\temail = %s\n' "$email"
+    true
+  } > "$ident"
+  echo "    git identity: ${name:-?} <${email:-?}> (from this machine)"
+}
+
 usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 # Accumulator so repeated flags compose instead of overwriting each other.
@@ -185,6 +218,7 @@ case "$cmd" in
       persist="$(abspath "$persist")"; persist="${persist%/}"
       mkdir -p "$persist" && chmod 700 "$persist"
       add_mount "$persist:w"
+      seed_git_identity "$persist"
     fi
 
     # --param is rejected outright for keys the template does not declare, so a

@@ -203,10 +203,20 @@ fi
 # while `ssh vm atuin status`, `secrets login atuin` and any other non-interactive
 # caller still reported it missing. Link it into ~/.local/bin, which .zshenv puts on
 # PATH for EVERY shell (interactive or not), and check for the real path here.
+#
+# --non-interactive is REQUIRED, not a preference. To decide whether it may prompt,
+# setup.atuin.sh otherwise probes for a terminal with `exec 3</dev/tty` — and during
+# `vm new` there is no controlling tty, so that redirection fails. /bin/sh is dash on
+# Debian/Ubuntu, where a failed redirection on the special builtin `exec` kills the
+# shell outright (POSIX), and neither the `{ ...; } 2>/dev/null` wrapper nor the
+# surrounding `if` stops it. The installer therefore died at line 15 with status 2 and
+# NO output whatsoever, leaving a bare "WARN: atuin install failed" in the provisioning
+# log and every fresh VM without atuin. The flag short-circuits the probe entirely.
 _atuin="$HOME/.atuin/bin/atuin"
 if ! have atuin && [ ! -x "$_atuin" ]; then
   echo "==> installing atuin"
-  curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh || echo "WARN: atuin install failed"
+  curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh \
+    | sh -s -- --non-interactive || echo "WARN: atuin install failed"
 fi
 # Relink only when it isn't already right (so this stays quiet on re-apply), and only
 # over nothing or a symlink — never over a real binary someone put there by hand. The

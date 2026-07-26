@@ -13,9 +13,13 @@
 #   dotenv-persist unshare PATH stop sharing it and put the real file back
 #   dotenv-persist project DIR  share a dir from the CURRENT REPO (e.g. .backlog)
 #
-# Re-run it after a login: a few tools replace a file by rename(), which swaps out
-# our symlink. This re-captures anything that came unlinked — the newer of the two
+# Re-running it re-captures anything that came unlinked: several of these tools write
+# a credential by rename(), which replaces our symlink with a real file, so the token
+# they just refreshed would live in this VM only and die with it. The newer of the two
 # copies wins, and the loser is kept as .dotenv-bak rather than deleted.
+#
+# ~/.zshrc does that on every shell start, because remembering to is not a plan —
+# claude refreshes its OAuth token mid-session, silently, hours after any login.
 #
 # What is NOT shared, deliberately: atuin's history.db. SQLite over a virtiofs/sshfs
 # mount is a corruption risk, and it does not need sharing — the key and session
@@ -38,11 +42,22 @@ die() { echo "dotenv-persist: $*" >&2; exit 1; }
 # account the token below IS the credential, and `secrets` reads that itself, so op
 # never looks at a shared path. Check for this before adding any config directory —
 # credential *files* are the safe thing to share.
+#
+# The three Claude Code entries are one unit — with only the credentials shared, a new
+# VM was logged in but re-ran onboarding and had no /resume list, which reads exactly
+# like "the login didn't persist":
+#   .claude/.credentials.json  the OAuth tokens
+#   .claude.json               account, onboarding state, and the per-project MRU list
+#                              /resume is built from — useless without the transcripts
+#   .claude/projects/          the transcripts themselves, one .jsonl per session
 DEFAULT_PATHS='
 .local/share/atuin/key
 .local/share/atuin/session
 .config/gh/hosts.yml
+.config/git/identity
 .claude/.credentials.json
+.claude.json
+.claude/projects/
 .config/dotenv/op-service-account-token
 '
 
@@ -122,6 +137,18 @@ fi
 
 case "${1:-link}" in
   link)
+    # ~/.zshrc re-links on every shell start, so several runs can now overlap — tmux
+    # restoring a session opens its panes at once. Two of them racing over the same
+    # mv pair could drop a credential, and a duplicate run has nothing to add anyway,
+    # so losing the race exits quietly. The staleness reap is what keeps a run killed
+    # mid-flight from disabling re-linking on this box forever.
+    LOCK="$CONFIG_DIR/.persist-lock"
+    if [ -d "$LOCK" ] && [ -z "$(find "$LOCK" -maxdepth 0 -mmin -1 2>/dev/null)" ]; then
+      rmdir "$LOCK" 2>/dev/null || true
+    fi
+    mkdir "$LOCK" 2>/dev/null || exit 0
+    trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+
     echo "==> dotenv-persist: sharing logins via $PERSIST"
     while IFS= read -r rel; do
       link_one "$rel"
