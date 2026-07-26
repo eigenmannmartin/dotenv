@@ -69,12 +69,18 @@ Mac, each bootstrapping this repo with the right feature set (Lima itself comes 
 the core [`Brewfile`](Brewfile)):
 
 ```sh
-vm new scratch                 # core only — fastest build
+vm new scratch                          # core only — fastest build
 vm new work --profile dev
-vm new hsg  --profile vpn      # the one that needs corporate VPN access
-vm new lab  --profile full --cpus 8 --memory 16 --disk 120
+vm new hsg  --profile vpn               # the one that needs corporate VPN access
+vm new lab  --profile k8s --profile vpn # profiles COMBINE (same as --profile k8s,vpn)
+vm new big  --profile full --cpus 8 --memory 16 --disk 120
 vm ls | vm shell <name> | vm ssh <name> | vm stop <name> | vm rm <name>
 ```
+
+`--profile` and `--features` may each be repeated and/or comma-separated; everything
+unions together, de-duplicates, and is emitted in a fixed order, so `k8s vpn` and
+`vpn k8s` build the identical VM. An unknown profile or feature aborts before any VM
+is created.
 
 It drives [`~/.lima/_templates/dotenv.yaml`](home/dot_lima/_templates/dotenv.yaml)
 (`$LIMA_HOME/_templates` is searched first, so it resolves as `template://dotenv`),

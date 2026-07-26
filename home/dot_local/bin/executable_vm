@@ -1,34 +1,60 @@
 #!/usr/bin/env bash
 # vm — purpose-built Lima VMs from this dotfiles repo. Runs on the HOST (the Mac).
 #
-#   vm new scratch                    throwaway box: shell only, fastest build
-#   vm new work --profile dev         + neovim/LazyVim, lazygit, node, devcontainer
-#   vm new hsg  --profile vpn         + openconnect/cisco-vpn (see `cisco-vpn --help`)
-#   vm new lab  --profile full --cpus 8 --memory 16 --disk 120
+#   vm new scratch                        throwaway box: shell only, fastest build
+#   vm new work --profile dev             + neovim/LazyVim, lazygit, node, devcontainer
+#   vm new hsg  --profile vpn             + openconnect/cisco-vpn (`cisco-vpn --help`)
+#   vm new lab  --profile k8s --profile vpn   profiles COMBINE — so does --profile k8s,vpn
+#   vm new big  --profile full --cpus 8 --memory 16 --disk 120
 #   vm ls | vm shell <name> [cmd…] | vm ssh <name> | vm stop <name> | vm rm <name>
 #
 # Profiles map to DOTENV_FEATURES, which is what actually decides the package set:
 #   min core | dev core,dev | k8s core,dev,k8s | vpn core,dev,vpn | full core,dev,k8s,vpn
-# Use --features to pass a set directly. Each VM also gets its own atuin history
-# (named after the instance) so a scratch box cannot pollute your laptop's.
+# --profile and --features may both be repeated and/or comma-separated; everything
+# unions together and is de-duplicated, so k8s+vpn gives one VM with both. Each VM
+# also gets its own atuin history (named after the instance) so a scratch box cannot
+# pollute your laptop's.
 set -euo pipefail
 
 TEMPLATE="${VM_TEMPLATE:-dotenv}"        # ~/.lima/_templates/dotenv.yaml
+KNOWN_FEATURES="core dev k8s vpn"        # keep in sync with home/.chezmoi.toml.tmpl
 
 have() { command -v "$1" >/dev/null 2>&1; }
 die()  { echo "vm: $*" >&2; exit 1; }
 
-usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
-profile_features() {
+# Accumulator so repeated flags compose instead of overwriting each other.
+FEATURES=""
+add_feature() {
+  case " $FEATURES " in *" $1 "*) return 0 ;; esac   # already have it
+  case " $KNOWN_FEATURES " in
+    *" $1 "*) FEATURES="${FEATURES:+$FEATURES }$1" ;;
+    *) die "unknown feature '$1' (${KNOWN_FEATURES// /|})" ;;
+  esac
+}
+
+# Note: no command substitution here on purpose — die() inside $(...) would only
+# kill the subshell, so a bad profile could otherwise slip through as an empty set.
+add_profile() {
   case "$1" in
-    min|core)  echo "core" ;;
-    dev)       echo "core,dev" ;;
-    k8s)       echo "core,dev,k8s" ;;
-    vpn)       echo "core,dev,vpn" ;;
-    full|all)  echo "core,dev,k8s,vpn" ;;
+    min|core)  add_feature core ;;
+    dev)       add_feature core; add_feature dev ;;
+    k8s)       add_feature core; add_feature dev; add_feature k8s ;;
+    vpn)       add_feature core; add_feature dev; add_feature vpn ;;
+    full|all)  add_feature core; add_feature dev; add_feature k8s; add_feature vpn ;;
     *)         die "unknown profile '$1' (min|dev|k8s|vpn|full)" ;;
   esac
+}
+
+# Emit in a stable order regardless of the order flags were given, so two equivalent
+# invocations produce the same DOTENV_FEATURES (and the same run_onchange hash).
+canonical_features() {
+  local f out=""
+  for f in $KNOWN_FEATURES; do
+    case " $FEATURES " in *" $f "*) out="${out:+$out,}$f" ;; esac
+  done
+  printf '%s' "$out"
 }
 
 cmd="${1:-}"; [ $# -gt 0 ] && shift || true
@@ -45,11 +71,19 @@ case "$cmd" in
   new|create)
     name="${1:-}"; [ -n "$name" ] && [ "${name#-}" = "$name" ] || die "usage: vm new <name> [options]"
     shift
-    features="core"; cpus=""; memory=""; disk=""; repo=""; ref=""; ctx=""
+    cpus=""; memory=""; disk=""; repo=""; ref=""; ctx=""
     while [ $# -gt 0 ]; do
       case "$1" in
-        --profile|-p) features="$(profile_features "${2:?--profile needs a value}")"; shift 2 ;;
-        --features|-f) features="${2:?--features needs a value}"; shift 2 ;;
+        # Commas become spaces so `--profile k8s,vpn` and `--profile k8s --profile vpn`
+        # are the same thing; word splitting also tolerates `--profile "k8s, vpn"`.
+        --profile|-p)
+          _v="${2:?--profile needs a value}"
+          for _p in ${_v//,/ }; do add_profile "$_p"; done
+          shift 2 ;;
+        --features|-f)
+          _v="${2:?--features needs a value}"
+          for _f in ${_v//,/ }; do add_feature "$_f"; done
+          shift 2 ;;
         --cpus)    cpus="${2:?}"; shift 2 ;;
         --memory)  memory="${2:?}"; shift 2 ;;
         --disk)    disk="${2:?}"; shift 2 ;;
@@ -59,6 +93,10 @@ case "$cmd" in
         *) die "unknown option '$1'" ;;
       esac
     done
+
+    # No profile/feature flags at all -> the cheapest useful box.
+    [ -n "$FEATURES" ] || add_feature core
+    features="$(canonical_features)"
 
     # --param is rejected outright for keys the template does not declare, so a
     # typo here fails loudly at create time rather than silently doing nothing.
