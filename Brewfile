@@ -1,5 +1,6 @@
 # dotenv macOS dependencies — CORE (the shell itself). Installed on every machine.
-# Feature add-ons live in Brewfile.dev / Brewfile.k8s and are pulled in by
+# Feature add-ons live in Brewfile.devlite / Brewfile.dev / Brewfile.k8s (additive,
+# in that order — "dev" means devlite + the container layer) and are pulled in by
 # home/.chezmoiscripts/run_onchange_after_20-install-packages.sh.tmpl according to
 # DOTENV_FEATURES. Install manually with: brew bundle --file Brewfile
 brew "chezmoi"

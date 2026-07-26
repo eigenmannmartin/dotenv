@@ -2,7 +2,8 @@
 # vm — purpose-built Lima VMs from this dotfiles repo. Runs on the HOST (the Mac).
 #
 #   vm new scratch                        throwaway box: shell only, fastest build
-#   vm new work --profile dev             + neovim/LazyVim, lazygit, node, devcontainer
+#   vm new work --profile devlite         + neovim/LazyVim, lazygit, node, devcontainer
+#   vm new box  --profile dev             + the container clients (lazydocker, dive)
 #   vm new hsg  --profile vpn             + openconnect/cisco-vpn (`cisco-vpn --help`)
 #   vm new lab  --profile k8s --profile vpn   profiles COMBINE — so does --profile k8s,vpn
 #   vm new big  --profile full --cpus 8 --memory 16 --disk 120
@@ -15,8 +16,11 @@
 #   vm ls | vm shell <name> [cmd…] | vm ssh <name> | vm stop <name> | vm rm <name>
 #
 # Profiles map to DOTENV_FEATURES, which is what actually decides the package set:
-#   min core | dev core,dev | k8s +k8s | vpn +vpn | ai +ai | docker +docker | full all
-# (everything except min implies dev)
+#   min core | devlite core,devlite | dev +dev | k8s +k8s | vpn +vpn | ai +ai
+#   docker +docker | full all
+# (everything except min implies devlite — the editor/toolchain half; `dev` adds the
+#  container clients on top, and OrbStack is macOS-only so a VM wants `docker` for the
+#  engine itself)
 # --profile and --features may both be repeated and/or comma-separated; everything
 # unions together and is de-duplicated, so k8s+vpn gives one VM with both.
 #
@@ -28,7 +32,9 @@
 set -euo pipefail
 
 TEMPLATE="${VM_TEMPLATE:-dotenv}"        # ~/.lima/_templates/dotenv.yaml
-KNOWN_FEATURES="core dev k8s vpn ai docker"   # keep in sync with home/.chezmoi.toml.tmpl
+# Order matters: canonical_features() emits in this order, and devlite must precede
+# dev so the frozen DOTENV_FEATURES reads like the layering it describes.
+KNOWN_FEATURES="core devlite dev k8s vpn ai docker"   # keep in sync with home/.chezmoi.toml.tmpl
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dotenv"
 MOUNTS_FILE="$CONFIG_DIR/vm-mounts"
 DEFAULT_PERSIST="${XDG_DATA_HOME:-$HOME/.local/share}/dotenv/vm-logins"
@@ -37,7 +43,7 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotenv"   # proxy control socke
 have() { command -v "$1" >/dev/null 2>&1; }
 die()  { echo "vm: $*" >&2; exit 1; }
 
-usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 # Accumulator so repeated flags compose instead of overwriting each other.
 FEATURES=""
@@ -54,15 +60,18 @@ add_feature() {
 add_profile() {
   case "$1" in
     min|core)  add_feature core ;;
-    dev)       add_feature core; add_feature dev ;;
-    k8s)       add_feature core; add_feature dev; add_feature k8s ;;
-    vpn)       add_feature core; add_feature dev; add_feature vpn ;;
-    # ai brings dev with it: both CLIs install through npm, which the dev feature is
-    # what puts on the box.
-    ai)        add_feature core; add_feature dev; add_feature ai ;;
-    docker)    add_feature core; add_feature dev; add_feature docker ;;
+    # The editor/toolchain half is what every non-min VM wants; the container clients
+    # (dev) are only useful next to an engine, which in a VM means the docker feature.
+    devlite|lite) add_feature core; add_feature devlite ;;
+    dev)       add_feature core; add_feature devlite; add_feature dev ;;
+    k8s)       add_feature core; add_feature devlite; add_feature k8s ;;
+    vpn)       add_feature core; add_feature devlite; add_feature vpn ;;
+    # ai brings devlite with it: both CLIs install through npm, which the devlite
+    # feature is what puts on the box.
+    ai)        add_feature core; add_feature devlite; add_feature ai ;;
+    docker)    add_feature core; add_feature devlite; add_feature dev; add_feature docker ;;
     full|all)  for _f in $KNOWN_FEATURES; do add_feature "$_f"; done ;;
-    *)         die "unknown profile '$1' (min|dev|k8s|vpn|ai|docker|full)" ;;
+    *)         die "unknown profile '$1' (min|devlite|dev|k8s|vpn|ai|docker|full)" ;;
   esac
 }
 

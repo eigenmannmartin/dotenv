@@ -37,18 +37,27 @@ split into groups. `core` alone — the default — is just the shell:
 
 ```sh
 ./install.sh                                  # core: zsh, tmux, prompt, atuin, fzf…
-DOTENV_FEATURES=core,dev ./install.sh         # + neovim/LazyVim, lazygit, node, jq
+DOTENV_FEATURES=core,devlite ./install.sh     # + neovim/LazyVim, lazygit, node, jq
+DOTENV_FEATURES=core,dev ./install.sh         # + containers (OrbStack on macOS)
 DOTENV_FEATURES=core,dev,k8s,vpn ./install.sh # everything
 ```
 
 | Feature | Adds |
 |---|---|
 | `core` | zsh + plugins, tmux + tpm, terminfo, oh-my-posh, atuin, fzf/ripgrep/bat/eza/zoxide/delta/fd |
-| `dev` | neovim + LazyVim config, lazygit, node, jq, direnv, btop, devcontainer CLI + `dx` (macOS also yq, gh + gh-dash, mise, git-absorb, OrbStack, dust/duf/procs) |
+| `devlite` | neovim + LazyVim config, lazygit, node, jq, direnv, btop, devcontainer CLI + `dx` (macOS also yq, gh + gh-dash, mise, git-absorb, dust/duf/procs) |
+| `dev` | **`devlite` + the container layer**: OrbStack (macOS only) and lazydocker/dive (+ ctop on macOS) |
 | `k8s` | k9s + its config (macOS also kubectx/stern/helm/kubecolor) |
 | `vpn` | openconnect + openconnect-saml → the [`cisco-vpn`](#cisco-vpn-entra-id-sso-from-the-lima-vm) command |
-| `ai` | Claude Code + Codex CLIs (`claude`, `codex`) + [Backlog.md](#backlogmd-boards) (`backlog`), via npm — implies `dev` for node |
+| `ai` | Claude Code + Codex CLIs (`claude`, `codex`) + [Backlog.md](#backlogmd-boards) (`backlog`), via npm — implies `devlite` for node |
 | `docker` | docker engine + compose, so [devcontainers](#dev-containers) run in the VM itself |
+
+`dev` is `devlite` plus everything container-shaped, split out because that half is the
+expensive one — OrbStack is a ~1 GB cask with a VM behind it, and a box you only edit
+code on never needs it. **OrbStack is macOS-only**: on Linux `dev` installs just the
+clients (lazydocker, dive), and the engine they talk to comes from `docker` (apt
+`docker.io`) or a remote `DOCKER_HOST`. Asking for `dev` always brings `devlite` with
+it, so `core,dev` and `core,devlite,dev` are the same machine.
 
 The choice is frozen into `~/.config/chezmoi/chezmoi.toml` by
 [`home/.chezmoi.toml.tmpl`](home/.chezmoi.toml.tmpl), so later bare `chezmoi apply`
@@ -56,13 +65,15 @@ runs keep it; re-run `install.sh` with a new `DOTENV_FEATURES` to change it. An
 unknown feature name aborts `init` rather than quietly installing less than asked.
 Machines that predate this split (config with a `sourceDir` and no `[data]`) keep
 getting **everything**, so upgrading can't silently strip a working workstation —
-run `DOTENV_FEATURES=core,dev ./install.sh` there once to opt into a smaller set. Gating
+run `DOTENV_FEATURES=core,devlite ./install.sh` there once to opt into a smaller set. Gating
 happens in two places: [`.chezmoiignore`](home/.chezmoiignore) keeps unused *configs*
 from deploying at all (a core-only box never gets `~/.config/nvim`, so LazyVim never
 bootstraps), and the
 [package script](home/.chezmoiscripts/run_onchange_after_20-install-packages.sh.tmpl)
 skips the matching installs. On macOS the same split applies via
-[`Brewfile`](Brewfile) + [`Brewfile.dev`](Brewfile.dev) + [`Brewfile.k8s`](Brewfile.k8s).
+[`Brewfile`](Brewfile) + [`Brewfile.devlite`](Brewfile.devlite) +
+[`Brewfile.dev`](Brewfile.dev) + [`Brewfile.k8s`](Brewfile.k8s); the per-feature files
+are additive, so `Brewfile.dev` holds only what `dev` adds on top of `devlite`.
 
 ## Lima VMs
 
@@ -72,11 +83,11 @@ the core [`Brewfile`](Brewfile)):
 
 ```sh
 vm new scratch                          # core only — fastest build
-vm new work --profile dev
+vm new work --profile devlite           # neovim/node/lazygit, no container layer
 vm new hsg  --profile vpn               # the one that needs corporate VPN access
 vm new lab  --profile k8s --profile vpn # profiles COMBINE (same as --profile k8s,vpn)
 vm new big  --profile full --cpus 8 --memory 16 --disk 120
-vm new box  --profile ai                # + claude code & codex CLIs (implies dev)
+vm new box  --profile ai                # + claude code & codex CLIs (implies devlite)
 vm new box  --profile docker            # + a docker engine, for devcontainers in the VM
 vm resize work --cpus 8 --memory 16     # change an existing VM (disk can only grow)
 vm ls | vm shell <name> | vm ssh <name> | vm stop <name> | vm rm <name>
@@ -237,8 +248,9 @@ so a barebones container falls back to the original command:
 
 Container & Kubernetes inspection — the **`dev`** feature (lazydocker/ctop/dive, via
 [`Brewfile.dev`](Brewfile.dev)) and the **`k8s`** feature (the rest, via
-[`Brewfile.k8s`](Brewfile.k8s)), macOS only; `docker`, `docker compose` and `kubectl`
-themselves come from OrbStack:
+[`Brewfile.k8s`](Brewfile.k8s)); `docker`, `docker compose` and `kubectl` themselves
+come from OrbStack, which is macOS-only — in a Linux VM `dev` brings lazydocker and
+dive only, and the engine comes from the `docker` feature:
 
 | Command | What it does |
 |---|---|
@@ -251,8 +263,9 @@ themselves come from OrbStack:
 | `stern` | tail & color-code logs from multiple pods at once |
 | `helm` | install, upgrade & inspect apps packaged as Helm charts |
 
-**More dev tooling** — the **`dev`** feature ([`Brewfile.dev`](Brewfile.dev)); on
-Linux only neovim/node/jq/direnv/btop/lazygit arrive, the rest stay macOS-only:
+**More dev tooling** — the **`devlite`** feature ([`Brewfile.devlite`](Brewfile.devlite),
+also pulled in by `dev`); on Linux only neovim/node/jq/direnv/btop/lazygit arrive, the
+rest stay macOS-only:
 
 | Command | What it does |
 |---|---|
@@ -411,8 +424,9 @@ VS Code can also bootstrap the dotfiles inside any container: set
 bits skip themselves inside containers. That path gets the plain `core` default, so
 set `DOTENV_FEATURES` in the container's environment if you want the dev toolchain —
 this repo's own [`.devcontainer/setup.sh`](.devcontainer/setup.sh) defaults itself to
-`core,dev` for exactly that reason. `dx` itself ships only with the `dev` feature,
-since it needs the devcontainer CLI.
+`core,devlite` for exactly that reason (`devlite`, not `dev`: you are already inside a
+container, so the container clients have nothing local to talk to). `dx` itself ships
+only with `devlite`/`dev`, since it needs the devcontainer CLI.
 
 ## Cisco VPN (Entra ID SSO) from the Lima VM
 
@@ -608,16 +622,20 @@ the default, so a plain apply installs the shell and nothing else:
 - **macOS**: Homebrew via [`Brewfile`](Brewfile) (core: tmux, atuin, oh-my-posh,
   fzf, ripgrep, bat, eza, zoxide, git-delta, fd, the two zsh plugins, + casks
   kitty & FiraCode Nerd Font, + **lima** for the VMs).
-  [`Brewfile.dev`](Brewfile.dev) adds neovim, node, jq/yq, gh, mise, direnv,
-  lazygit, dust/duf/procs/btop and **OrbStack** + lazydocker/ctop/dive;
+  [`Brewfile.devlite`](Brewfile.devlite) adds neovim, node, jq/yq, gh, mise, direnv,
+  lazygit, dust/duf/procs/btop; [`Brewfile.dev`](Brewfile.dev) layers the container
+  half on top (**OrbStack** + lazydocker/ctop/dive);
   [`Brewfile.k8s`](Brewfile.k8s) adds k9s/kubecolor/kubectx/stern/helm. OrbStack
   replaces Docker Desktop and provides the `docker`/`docker compose`/`kubectl`
   CLIs; open the app once after install to finish CLI + helper setup.
 - **Debian/Ubuntu**: `apt` for the core set — zsh/tmux/git/ripgrep/fzf/bat (+ `eza`,
   `zoxide`, `git-delta` on 24.04+) — plus official installers for atuin &
   oh-my-posh; kitty + Nerd Font on desktops only (skipped in containers and on
-  headless VMs). `dev` adds neovim/python3/nodejs/jq/btop/direnv from apt and
-  lazygit from its GitHub release; `k8s` adds k9s the same way; `vpn` adds
+  headless VMs) — atuin is symlinked into `~/.local/bin`, since its installer drops
+  it in `~/.atuin/bin`, which only `~/.zshrc` ever puts on PATH. `devlite` adds
+  neovim/python3/nodejs/jq/btop/direnv from apt and lazygit from its GitHub release;
+  `dev` adds lazydocker + dive the same way (no OrbStack — macOS only — so pair it
+  with `docker` for an engine); `k8s` adds k9s the same way; `vpn` adds
   openconnect + vpnc-scripts + openconnect-saml. **`yq`, `gh`, `mise`,
   `git-absorb` and the container tools remain macOS-only** — install them from
   Homebrew-on-Linux or upstream releases if you want them in a VM. LazyVim needs

@@ -3,7 +3,8 @@
 #
 # Split into feature groups so a throwaway VM is not made to wait for a toolchain it
 # will never use. Pick them per machine with DOTENV_FEATURES (see .chezmoidata.toml);
-# `core` alone is just the shell, which is what most VMs actually need.
+# `core` alone is just the shell, which is what most VMs actually need, and `devlite`
+# is the editor/toolchain without the container half (which is what `dev` adds).
 #
 # The hash line below is load-bearing: run_onchange_ re-runs on a change to the
 # script's RENDERED text, and a feature toggle that only flips template conditionals
@@ -12,6 +13,10 @@
 set -uo pipefail
 
 {{- $dev := has "dev" .features }}
+{{/* "dev" is "devlite" plus the container layer, so it implies it everywhere. Anything
+     that is not a container tool belongs behind $devlite, or asking for the heavier
+     feature would be the only way to get an editor. */}}
+{{- $devlite := or (has "devlite" .features) $dev }}
 {{- $k8s := has "k8s" .features }}
 {{- $vpn := has "vpn" .features }}
 {{- $ai := has "ai" .features }}
@@ -109,7 +114,7 @@ npm_global_install() {   # <package> [min-node-major]
 if have brew; then
   # --no-upgrade: install only what's missing; don't churn already-installed tools.
   # Brewfile.<feature> files are additive; a missing one is simply skipped.
-  for _bf in Brewfile {{ if $dev }}Brewfile.dev{{ end }} {{ if $k8s }}Brewfile.k8s{{ end }}; do
+  for _bf in Brewfile {{ if $devlite }}Brewfile.devlite{{ end }} {{ if $dev }}Brewfile.dev{{ end }} {{ if $k8s }}Brewfile.k8s{{ end }}; do
     _p="{{ .chezmoi.workingTree }}/$_bf"
     [ -f "$_p" ] || continue
     brew bundle --no-upgrade --file "$_p" || echo "WARN: brew bundle ($_bf) had failures"
@@ -143,8 +148,8 @@ if have apt-get; then
     ripgrep fzf bat kitty-terminfo ncurses-term \
     || echo "WARN: some core apt packages failed to install"
 
-{{ if $dev }}
-  # dev — editor + language runtimes. Biggest single chunk of a full install, and
+{{ if $devlite }}
+  # devlite — editor + language runtimes. Biggest single chunk of a full install, and
   # dead weight on a VM you only ssh into to run one service.
   #
   # npm is listed EXPLICITLY: Debian/Ubuntu split it out of the nodejs package, so
@@ -191,11 +196,30 @@ else
   echo "WARN: apt-get not found; this installer targets Debian/Ubuntu."
 fi
 
-# atuin — not reliably packaged in apt; official installer (-> ~/.local/bin)
-if ! have atuin; then
+# atuin — core (Ctrl-R is atuin on every box), not reliably packaged in apt, so the
+# official installer. It lands in ~/.atuin/bin, which NOTHING puts on PATH except the
+# `. ~/.atuin/bin/env` line in ~/.zshrc — and this script runs under bash from chezmoi,
+# so `have atuin` was false on every single apply: atuin got re-downloaded every time,
+# while `ssh vm atuin status`, `secrets login atuin` and any other non-interactive
+# caller still reported it missing. Link it into ~/.local/bin, which .zshenv puts on
+# PATH for EVERY shell (interactive or not), and check for the real path here.
+_atuin="$HOME/.atuin/bin/atuin"
+if ! have atuin && [ ! -x "$_atuin" ]; then
   echo "==> installing atuin"
   curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh || echo "WARN: atuin install failed"
 fi
+# Relink only when it isn't already right (so this stays quiet on re-apply), and only
+# over nothing or a symlink — never over a real binary someone put there by hand. The
+# -h test matters on its own: a link to a since-removed atuin must be re-pointed, and
+# -e follows the link and calls it absent.
+_link="$HOME/.local/bin/atuin"
+if [ -x "$_atuin" ] && [ "$(readlink "$_link" 2>/dev/null)" != "$_atuin" ] \
+   && { [ ! -e "$_link" ] || [ -h "$_link" ]; }; then
+  mkdir -p "$HOME/.local/bin"
+  ln -sfn "$_atuin" "$_link" \
+    && echo "==> linked atuin into ~/.local/bin (on PATH for non-interactive shells too)"
+fi
+unset _atuin _link
 
 if ! have oh-my-posh; then
   echo "==> installing oh-my-posh"
@@ -204,9 +228,18 @@ if ! have oh-my-posh; then
     || echo "WARN: oh-my-posh install failed"
 fi
 
-{{ if $dev }}
+{{ if $devlite }}
 mkdir -p "$HOME/.local/bin"
 gh_release_install jesseduffield/lazygit lazygit 'lazygit_%V_Linux_%A.tar.gz'
+{{ end }}
+{{ if $dev }}
+# dev — the container layer. OrbStack is macOS-only, so on Linux this is just the
+# clients; the engine itself comes from the "docker" feature (apt docker.io) or from a
+# DOCKER_HOST pointing somewhere else. ctop is not here: it publishes a bare binary
+# rather than a tarball, which gh_release_install cannot unpack — use `docker stats`.
+mkdir -p "$HOME/.local/bin"
+gh_release_install jesseduffield/lazydocker lazydocker 'lazydocker_%V_Linux_%A.tar.gz'
+gh_release_install wagoodman/dive dive 'dive_%V_linux_%G.tar.gz'
 {{ end }}
 {{ if $k8s }}
 mkdir -p "$HOME/.local/bin"
@@ -307,12 +340,15 @@ PY
 fi
 {{ end }}
 
-{{ if $dev }}
+{{ if $devlite }}
 if have gh; then
   gh extension list 2>/dev/null | grep -q 'dlvhdr/gh-dash' \
     || gh extension install dlvhdr/gh-dash >/dev/null 2>&1 || true
 fi
 
+# The devcontainer CLI is a node package, not a container runtime — it needs *a*
+# docker to talk to (OrbStack via "dev", or apt docker.io via "docker"), but installing
+# it on a devlite box costs nothing and keeps `dx` working against a remote engine.
 npm_global_install @devcontainers/cli devcontainer
 {{ end }}
 

@@ -14,10 +14,13 @@
 # $known in that template.
 #
 # Groups (see home/.chezmoiscripts/run_onchange_after_20-install-packages.sh.tmpl):
-#   core  shell only — zsh, tmux, terminfo, prompt, atuin, fzf/ripgrep/bat/eza/…
-#   dev   neovim + LazyVim, lazygit, node, jq, direnv, devcontainer CLI
-#   k8s   k9s (+ its config)
-#   vpn   openconnect + openconnect-saml (the cisco-vpn command)
+#   core     shell only — zsh, tmux, terminfo, prompt, atuin, fzf/ripgrep/bat/eza/…
+#   devlite  neovim + LazyVim, lazygit, node, jq, direnv, devcontainer CLI
+#   dev      devlite + the container layer (OrbStack on macOS; lazydocker/dive)
+#   k8s      k9s (+ its config)
+#   vpn      openconnect + openconnect-saml (the cisco-vpn command)
+#   ai       claude + codex + backlog (npm)
+#   docker   docker engine inside a Linux VM (macOS gets it from OrbStack via dev)
 #
-# Choose per machine with:  DOTENV_FEATURES=core,dev ./install.sh
+# Choose per machine with:  DOTENV_FEATURES=core,devlite ./install.sh
 features = ["core", "dev", "k8s", "vpn"]

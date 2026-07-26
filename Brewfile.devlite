@@ -1,0 +1,21 @@
+# dotenv macOS dependencies — "devlite" feature. Editor, language runtimes, git tooling.
+# Pulled in when DOTENV_FEATURES contains "devlite" *or* "dev" — `dev` is this file
+# plus the container layer in Brewfile.dev, so it never has to repeat these lines.
+#
+# The split exists because the container layer is the expensive half: OrbStack alone is
+# a ~1 GB cask with a VM behind it, and a box you only edit code on never needs it.
+#   DOTENV_FEATURES=core,devlite     neovim + toolchain, no container runtime
+#   DOTENV_FEATURES=core,dev         the above + OrbStack/lazydocker/ctop/dive
+brew "neovim"       # editor — LazyVim config shipped to ~/.config/nvim
+brew "node"         # runtime for some LSPs (yaml/k8s schema validation in nvim)
+brew "jq"           # query/transform JSON (kubectl -o json, docker inspect, APIs)
+brew "yq"           # query/transform YAML (k8s manifests, helm values)
+brew "gh"           # GitHub CLI — PRs/issues/reviews (+ gh-dash extension)
+brew "git-absorb"   # auto-route fixup commits into the right history
+brew "mise"         # per-project tool versions (Go/Python/Node/Dart) + tasks
+brew "direnv"       # per-directory env; loads op:// secrets on cd (use_op helper)
+brew "lazygit"      # TUI for git — stage hunks, rebase, stash (prefix+g / cmd+g)
+brew "dust"         # tree-style disk usage (du)
+brew "duf"          # friendly disk/mount table (df)
+brew "procs"        # modern process viewer (ps)
+brew "btop"         # system monitor (Catppuccin)

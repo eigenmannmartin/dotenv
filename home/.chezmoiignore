@@ -20,14 +20,16 @@
 
 {{/* Feature-gated payloads. The nvim config is the big one: LazyVim bootstraps
      dozens of plugins on first launch, which is pure cost on a VM you never edit in. */}}
-{{ if not (has "dev" .features) }}
+{{/* These belong to the editor/toolchain half, so they follow "devlite" — and "dev"
+     (devlite + the container layer) implies it, exactly as the package script does. */}}
+{{ if not (or (has "devlite" .features) (has "dev" .features)) }}
 .config/nvim
 .config/gh-dash
 .config/direnv
 .config/lazygit
 {{/* dx shells into a repo's devcontainer via the devcontainer CLI, which only the
-     dev feature installs — shipping it to a core box gives a command that can only
-     ever print "devcontainer CLI missing". */}}
+     devlite/dev features install — shipping it to a core box gives a command that can
+     only ever print "devcontainer CLI missing". */}}
 .local/bin/dx
 {{ end }}
 

@@ -7,8 +7,10 @@ set -uo pipefail
 #    even if a package step fails, we still want signing wired below.
 #    A devcontainer exists to run a repo's build/test commands, so it needs the dev
 #    toolchain — without this it would get the "core" default (shell only) and lose
-#    the very thing it is for. Override from the environment to build a leaner one.
-DOTENV_FEATURES="${DOTENV_FEATURES:-core,dev}" ./install.sh \
+#    the very thing it is for. "devlite" and not "dev": we are already inside a
+#    container, so the container clients have nothing local to talk to. Override from
+#    the environment to build a leaner (or heavier) one.
+DOTENV_FEATURES="${DOTENV_FEATURES:-core,devlite}" ./install.sh \
   || echo "WARN: dotfiles apply had issues — continuing to wire git signing."
 
 # 2) Git identity — matches the host git identity (a GitHub-verified email) for the "Verified" badge.
