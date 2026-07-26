@@ -8,8 +8,10 @@
 #   vm new big  --profile full --cpus 8 --memory 16 --disk 120
 #   vm new work --mount ~/code --mount ~/notes:ro     share just these dirs
 #   vm new box  --profile ai              + claude code & codex CLIs
-#   vm proxy hsg                          SOCKS5 on :1080 — browse via that VM's VPN
+#   vm proxy hsg [port]                   SOCKS5 on :1080 — browse via that VM's VPN
+#     …runs in the background: vm proxy status | vm proxy stop [name] | --foreground
 #   vm resize work --cpus 8 --memory 16   change a VM after the fact (disk can only grow)
+#   vm ssh work -t claude                 -t gives a pty, which full-screen TUIs need
 #   vm ls | vm shell <name> [cmd…] | vm ssh <name> | vm stop <name> | vm rm <name>
 #
 # Profiles map to DOTENV_FEATURES, which is what actually decides the package set:
@@ -30,11 +32,12 @@ KNOWN_FEATURES="core dev k8s vpn ai docker"   # keep in sync with home/.chezmoi.
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dotenv"
 MOUNTS_FILE="$CONFIG_DIR/vm-mounts"
 DEFAULT_PERSIST="${XDG_DATA_HOME:-$HOME/.local/share}/dotenv/vm-logins"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotenv"   # proxy control sockets
 
 have() { command -v "$1" >/dev/null 2>&1; }
 die()  { echo "vm: $*" >&2; exit 1; }
 
-usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 # Accumulator so repeated flags compose instead of overwriting each other.
 FEATURES=""
@@ -237,10 +240,22 @@ case "$cmd" in
     # Lima writes a per-instance ssh.config; with ssh-over-vsock (the default on
     # macOS/vz since Lima 2.0) there may be no forwarded TCP port to target, so
     # always go through that file rather than guessing host/port.
-    name="${1:?usage: vm ssh <name>}"; shift
+    name="${1:?usage: vm ssh <name> [-t] [command…]}"; shift
     cfg="${LIMA_HOME:-$HOME/.lima}/$name/ssh.config"
     [ -f "$cfg" ] || die "no ssh config for '$name' — is it running?"
-    exec ssh -F "$cfg" "lima-$name" "$@"
+    # -t has to precede the hostname to reach ssh at all, so hoist it here. Needed for
+    # full-screen TUIs run as a one-shot command (claude, codex, k9s, nvim): without a
+    # pty they abort with "Raw mode is not supported". Not the default, because a tty
+    # also mangles piped output with CRs.
+    tty_args=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -t) tty_args=(-t); shift ;;
+        -T) tty_args=(-T); shift ;;
+        *)  break ;;
+      esac
+    done
+    exec ssh -F "$cfg" ${tty_args+"${tty_args[@]}"} "lima-$name" "$@"
     ;;
 
   proxy)
@@ -254,11 +269,100 @@ case "$cmd" in
     # the whole point for split-horizon intranet names. (Chrome does this natively;
     # in Firefox tick "Proxy DNS when using SOCKS v5". curl needs socks5h, not socks5,
     # for the same reason.)
-    name="${1:?usage: vm proxy <name> [port]}"; port="${2:-1080}"
-    cfg="${LIMA_HOME:-$HOME/.lima}/$name/ssh.config"
+    #
+    # Backgrounding rides on ssh's own ControlMaster rather than a pid file: -M puts a
+    # control socket on disk, and `-O check` / `-O exit` then query and stop that exact
+    # connection. No pid to go stale, and no risk of signalling an unrelated ssh.
+    proxy_ctl()  { printf '%s/proxy-%s.sock' "$STATE_DIR" "$1"; }
+    proxy_port_file() { printf '%s/proxy-%s.port' "$STATE_DIR" "$1"; }
+    proxy_cfg()  { printf '%s/%s/ssh.config' "${LIMA_HOME:-$HOME/.lima}" "$1"; }
+    proxy_alive() {  # <name> -> prints ssh's "Master running (pid=N)" on success
+      local n="$1"
+      [ -S "$(proxy_ctl "$n")" ] || return 1
+      ssh -F "$(proxy_cfg "$n")" -S "$(proxy_ctl "$n")" -O check "lima-$n" 2>&1
+    }
+    proxy_names() {  # every name we have a control socket for
+      local s n
+      for s in "$STATE_DIR"/proxy-*.sock; do
+        [ -e "$s" ] || continue
+        n="${s##*/proxy-}"; printf '%s\n' "${n%.sock}"
+      done
+    }
+
+    psub="${1:-}"
+    case "$psub" in
+      ""|-h|--help)
+        die "usage: vm proxy <name> [port] [--foreground] | vm proxy status | vm proxy stop [name]" ;;
+
+      status)
+        found=0
+        while IFS= read -r n; do
+          [ -n "$n" ] || continue
+          if out="$(proxy_alive "$n")"; then
+            found=1
+            printf '%-12s 127.0.0.1:%-6s %s\n' "$n" \
+              "$(cat "$(proxy_port_file "$n")" 2>/dev/null || echo '?')" \
+              "$(printf '%s' "$out" | tr -d '\n')"
+          else
+            # The VM was stopped or the ssh died; the socket file outlives both.
+            rm -f "$(proxy_ctl "$n")" "$(proxy_port_file "$n")"
+          fi
+        done <<EOF
+$(proxy_names)
+EOF
+        [ "$found" = 1 ] || { echo "vm: no proxies running"; exit 1; }
+        exit 0 ;;
+
+      stop)
+        shift
+        names="${1:-$(proxy_names)}"
+        [ -n "$names" ] || { echo "vm: no proxies running"; exit 0; }
+        for n in $names; do
+          if proxy_alive "$n" >/dev/null 2>&1; then
+            ssh -F "$(proxy_cfg "$n")" -S "$(proxy_ctl "$n")" -O exit "lima-$n" >/dev/null 2>&1 \
+              && echo "==> vm: proxy for '$n' stopped"
+          else
+            echo "vm: no proxy running for '$n'"
+          fi
+          rm -f "$(proxy_ctl "$n")" "$(proxy_port_file "$n")"
+        done
+        exit 0 ;;
+    esac
+
+    name="$psub"; shift
+    port=1080; foreground=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --foreground) foreground=1; shift ;;
+        [0-9]*)       port="$1"; shift ;;
+        *)            die "unknown option '$1' (vm proxy <name> [port] [--foreground])" ;;
+      esac
+    done
+    cfg="$(proxy_cfg "$name")"
     [ -f "$cfg" ] || die "no ssh config for '$name' — is it running?"
+
+    if [ "$foreground" = 0 ]; then
+      if proxy_alive "$name" >/dev/null 2>&1; then
+        die "a proxy for '$name' is already running (vm proxy status)"
+      fi
+      # A unix socket path is capped at ~104 bytes by the kernel, and ssh fails with a
+      # confusing error when it overflows. Under a normal $HOME this is ~50.
+      [ "${#name}" -lt 200 ] && [ "$(printf '%s' "$(proxy_ctl "$name")" | wc -c)" -le 100 ] \
+        || die "control socket path too long — set XDG_STATE_HOME to something shorter"
+      mkdir -p "$STATE_DIR"
+      rm -f "$(proxy_ctl "$name")"     # left behind by a previous ssh that died
+      # -f backgrounds only after authentication, so a failure to bind the port or
+      # reach the VM still surfaces here rather than vanishing into the background.
+      ssh -F "$cfg" -M -S "$(proxy_ctl "$name")" -f -N -D "127.0.0.1:$port" "lima-$name" \
+        || die "could not start the proxy (port $port already in use?)"
+      proxy_alive "$name" >/dev/null 2>&1 || die "proxy did not come up — try --foreground to see why"
+      printf '%s\n' "$port" > "$(proxy_port_file "$name")"
+      echo "==> vm: SOCKS5 proxy for '$name' on 127.0.0.1:$port (vm proxy stop $name)"
+    else
+      echo "==> vm: SOCKS5 proxy for '$name' on 127.0.0.1:$port (Ctrl-C to stop)"
+    fi
+
     cat <<EOF
-==> vm: SOCKS5 proxy for '$name' on 127.0.0.1:$port (Ctrl-C to stop)
 
     Point something at it:
       Chrome   open -na "Google Chrome" --args --user-data-dir=/tmp/chrome-$name \\
@@ -271,7 +375,8 @@ case "$cmd" in
 
 EOF
     # -N: no remote command, this is a tunnel only.
-    exec ssh -F "$cfg" -N -D "127.0.0.1:$port" "lima-$name"
+    [ "$foreground" = 1 ] && exec ssh -F "$cfg" -N -D "127.0.0.1:$port" "lima-$name"
+    exit 0
     ;;
 
   *) die "unknown command '$cmd' (try: vm --help)" ;;

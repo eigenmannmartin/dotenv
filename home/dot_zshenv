@@ -1,0 +1,19 @@
+# Read by EVERY zsh — interactive or not, login or not. Nothing else is.
+#
+# That is the whole point of this file: `ssh vm claude`, `limactl shell vm codex` and
+# any other "run one command remotely" invocation runs neither .zprofile nor .zshrc,
+# so a tool installed under ~/.local/bin is simply not found. npm's prefix here is
+# ~/.local (set by the package script, so global installs need no root), which is
+# where claude, codex and devcontainer land — and on Linux `ip`, needed by
+# `cisco-vpn status`, lives in /usr/sbin, which a non-login shell also misses.
+#
+# Keep this file tiny and free of side effects: it runs for every zsh script too.
+# The same PATH entries are also set in .zprofile, deliberately — on macOS
+# /etc/zprofile runs path_helper AFTER .zshenv and reorders PATH, so a login shell
+# needs its own pass. Both are guarded, so nothing is duplicated.
+
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
+
+if [ "$(uname -s)" = "Linux" ]; then
+  case ":$PATH:" in *":/usr/sbin:"*) ;; *) export PATH="$PATH:/usr/sbin:/sbin" ;; esac
+fi

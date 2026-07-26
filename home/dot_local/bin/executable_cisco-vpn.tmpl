@@ -45,7 +45,7 @@ Running it as a service:
        cisco-vpn sso <gateway> -b               connect, then detach into the background
        cisco-vpn status [-v]                    connected? interface, routes, DNS, traffic
        cisco-vpn suspend                        drop the tunnel but KEEP the session
-       cisco-vpn resume                         reconnect from the saved session, no login
+       cisco-vpn resume [-b]                    reconnect from the saved session, no login
        cisco-vpn stop                           disconnect AND log out (discards the session)
        cisco-vpn install-service                resume automatically on boot (systemd)
 
