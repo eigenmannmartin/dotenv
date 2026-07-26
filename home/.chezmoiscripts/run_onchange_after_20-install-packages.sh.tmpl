@@ -20,6 +20,22 @@ set -uo pipefail
 echo "==> dotenv: installing packages ({{ .chezmoi.os }}; features: {{ join "," .features }})"
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# One-time cleanup: a `backlog` wrapper shipped from this repo briefly (commit 3fc94f8,
+# built against the wrong project) and would now SHADOW the real Backlog.md CLI, which
+# npm installs to exactly the same path. Dropping a file from the source state does not
+# remove it — chezmoi only stops managing it — so it has to be deleted explicitly.
+#
+# NOT via .chezmoiremove: that would delete ~/.local/bin/backlog unconditionally, real
+# CLI included, on every single apply. Hence the content guard, which also skips the
+# npm install (a symlink into ../lib/node_modules) without ever reading through it.
+_stale="$HOME/.local/bin/backlog"
+if [ -f "$_stale" ] && [ ! -L "$_stale" ] \
+   && head -3 "$_stale" 2>/dev/null | grep -q "BacklogMD's kanban board"; then
+  rm -f "$_stale" \
+    && echo "==> removed the obsolete dotenv 'backlog' wrapper (Backlog.md owns that name now)"
+fi
+unset _stale
 is_container() {
   [ -e /.dockerenv ] || [ -e /run/.containerenv ] \
     || [ -n "${REMOTE_CONTAINERS:-}" ] || [ -n "${CODESPACES:-}" ] \
