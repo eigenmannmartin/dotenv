@@ -307,6 +307,9 @@ npm_global_install @devcontainers/cli devcontainer
 # The node floors come from each package's own "engines" field.
 npm_global_install @anthropic-ai/claude-code claude 22
 npm_global_install @openai/codex codex 16
+# BacklogMD's kanban dashboard, driven by ~/.local/bin/backlog. The backlog itself is
+# just markdown in the project — this only renders it.
+npm_global_install @backlogmd/serve backlogmd-serve 22
 {{ end }}
 
 {{ if eq .chezmoi.os "linux" -}}

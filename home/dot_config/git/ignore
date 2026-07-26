@@ -1,0 +1,9 @@
+# Global gitignore. Git reads this path by default — no core.excludesFile needed,
+# it is the XDG fallback ($XDG_CONFIG_HOME/git/ignore). Rules here apply to EVERY
+# repo on the machine, so keep them to things that are never anyone's source.
+
+# BacklogMD keeps its backlog as plain markdown inside the project, at .backlogmd/.
+# Its docs make tracking optional ("if you do not want the backlog files tracked,
+# just add them to .gitignore"). Ignoring it globally means no per-repo .gitignore
+# edit — and no accidental commit of agent scratch work into someone else's repo.
+.backlogmd/
