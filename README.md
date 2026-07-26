@@ -280,31 +280,48 @@ in the repo, with a terminal kanban board and a web UI. It comes with the `ai` f
 (`npm i -g backlog.md`, prebuilt per-platform binaries, no node floor).
 
 ```sh
-backlog init "my project"     # or --no-git for a filesystem-only board
+backlog init "my project"     # --no-git for a filesystem-only board
 backlog task create "..."
 backlog board                 # kanban in the terminal
-backlog browser               # web UI  (--port to move it)
+backlog browser               # web UI on :6420
+```
+
+Three things worth setting on a VM, none of which `init` gets right for this setup:
+
+```sh
+backlog config set autoOpenBrowser false        # there is no browser in the VM to open
+backlog completion install --shell zsh          # init installs BASH completions
+echo 'backlog/' >> .git/info/exclude            # keep the board out of the repo
 ```
 
 **`backlog browser` needs no port forwarding.** Lima forwards every guest loopback
-listener to the Mac's `127.0.0.1`, so a board served inside the VM opens in the Mac's
-browser at the same address — the same mechanism the VPN SSO callback rides on. Two
-VMs serving on the same port collide on the host, so give the second one `--port`.
+listener to the Mac's `127.0.0.1`, so the board served inside the VM opens at
+`http://localhost:6420` in the Mac's browser — the same mechanism the VPN SSO callback
+rides on. Two VMs on the same port collide on the host; `defaultPort` in
+`backlog/config.yml` (or `--port`) moves one. `autoOpenBrowser` is on by default and
+has nothing to open in a headless guest, so turn it off and click the URL yourself.
+
+Completions install to `~/.zsh/completions`, which is on no default `fpath` — the
+[`.zshrc`](home/dot_zshrc) adds it, before `compinit`, or they would be written and
+then silently ignored.
 
 **Keeping it out of the repo.** Backlog.md stores tasks in a *project-relative* folder
-— `backlog/`, `.backlog/`, or a custom path in `backlog.config.yml` — so it cannot
-simply be pointed outside the working tree. [`~/.config/git/ignore`](home/dot_config/git/ignore)
-globally ignores `.backlog/`, and git reads that path with no configuration at all
-(it is the XDG fallback for `core.excludesFile`). The **dot-prefixed** spelling is
-deliberate: globally ignoring plain `backlog/` would hide legitimately-named
-directories in unrelated repos — Backlog.md's own repo keeps its tasks in `backlog/`.
-If you use the default name, put it in that project's own `.gitignore` instead.
+(`backlog/` by default, config in `backlog/config.yml`), so it cannot be pointed
+outside the working tree. `.git/info/exclude` is the right lever: per-repo, and unlike
+a `.gitignore` line it is itself untracked, so nothing about the board reaches the
+project's history. [`~/.config/git/ignore`](home/dot_config/git/ignore) covers the
+`.backlog/` spelling globally for repos where you choose that name — deliberately
+*not* plain `backlog/`, since globally ignoring that would hide legitimately-named
+directories in unrelated repos (Backlog.md's own repo keeps its tasks in `backlog/`).
+
+Note that a non-MCP `init` also writes an `AGENTS.md` at the repo root, which is a
+tracked file in the project — exclude that too if you don't want it committed.
 
 **Persisting it** depends on where the repo lives, and the good case needs nothing:
 
 - **Repo on a `--mount`** (`vm new work --mount ~/code`): the folder is already on the
   Mac's disk and survives `vm rm` for free. This is the shape to prefer.
-- **Repo cloned inside the VM**: it dies with the VM. `dotenv-persist project .backlog`
+- **Repo cloned inside the VM**: it dies with the VM. `dotenv-persist project backlog`
   moves it into the [shared store](#logins-that-survive-a-rebuild) under
   `projects/<repo>/` and symlinks it back, so it survives rebuilds — and every VM on
   that store sees the same board.

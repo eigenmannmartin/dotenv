@@ -60,6 +60,12 @@ if [[ "$OSTYPE" == darwin* ]]; then
   # End of Docker CLI completions
 fi
 
+# Completions that tools install for themselves. `backlog completion install --shell zsh`
+# drops _backlog here, and its own advice is to add exactly this line — but the dir is on
+# no default fpath, so without it the completions are written and then silently ignored.
+# Must precede compinit: that only scans fpath as it stands the moment it runs.
+[[ -d "$HOME/.zsh/completions" ]] && fpath=("$HOME/.zsh/completions" $fpath)
+
 # Initialize completions once — after all fpath edits, before the compdef/fzf-tab setup below.
 # (Hoisted out of the Docker block so removing that vendor block can't silently break completion.)
 #
