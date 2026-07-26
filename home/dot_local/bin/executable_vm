@@ -6,23 +6,32 @@
 #   vm new hsg  --profile vpn             + openconnect/cisco-vpn (`cisco-vpn --help`)
 #   vm new lab  --profile k8s --profile vpn   profiles COMBINE — so does --profile k8s,vpn
 #   vm new big  --profile full --cpus 8 --memory 16 --disk 120
+#   vm new work --mount ~/code --mount ~/notes:ro     share just these dirs
+#   vm proxy hsg                          SOCKS5 on :1080 — browse via that VM's VPN
 #   vm ls | vm shell <name> [cmd…] | vm ssh <name> | vm stop <name> | vm rm <name>
 #
 # Profiles map to DOTENV_FEATURES, which is what actually decides the package set:
 #   min core | dev core,dev | k8s core,dev,k8s | vpn core,dev,vpn | full core,dev,k8s,vpn
 # --profile and --features may both be repeated and/or comma-separated; everything
-# unions together and is de-duplicated, so k8s+vpn gives one VM with both. Each VM
-# also gets its own atuin history (named after the instance) so a scratch box cannot
-# pollute your laptop's.
+# unions together and is de-duplicated, so k8s+vpn gives one VM with both.
+#
+# Your home directory is NOT shared (that is why the template does not use
+# template://ubuntu). Share directories explicitly with --mount, writable unless you
+# say :ro; put the ones you always want in ~/.config/dotenv/vm-mounts, one per line.
+# Logins (atuin, gh, claude, op…) are shared through one small host directory so they
+# survive a rebuild — see --persist and `dotenv-persist` inside the VM.
 set -euo pipefail
 
 TEMPLATE="${VM_TEMPLATE:-dotenv}"        # ~/.lima/_templates/dotenv.yaml
 KNOWN_FEATURES="core dev k8s vpn"        # keep in sync with home/.chezmoi.toml.tmpl
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dotenv"
+MOUNTS_FILE="$CONFIG_DIR/vm-mounts"
+DEFAULT_PERSIST="${XDG_DATA_HOME:-$HOME/.local/share}/dotenv/vm-logins"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 die()  { echo "vm: $*" >&2; exit 1; }
 
-usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 # Accumulator so repeated flags compose instead of overwriting each other.
 FEATURES=""
@@ -57,6 +66,52 @@ canonical_features() {
   printf '%s' "$out"
 }
 
+# Lima wants an absolute host path; a bare `code` or `./code` would be silently
+# mounted as something else entirely (or rejected) depending on its cwd.
+abspath() {
+  case "$1" in
+    "~")   printf '%s' "$HOME" ;;
+    "~/"*) printf '%s' "$HOME/${1#\~/}" ;;
+    /*)    printf '%s' "$1" ;;
+    *)     printf '%s' "$PWD/$1" ;;
+  esac
+}
+
+MOUNTS=()   # each entry is already in limactl's "<abs path>[:w]" form
+add_mount() {
+  local spec="$1" mode="w" path
+  case "$spec" in
+    *:ro) mode="";  spec="${spec%:ro}" ;;
+    *:r)  mode="";  spec="${spec%:r}"  ;;
+    *:w)  mode="w"; spec="${spec%:w}"  ;;
+  esac
+  [ -n "$spec" ] || return 0
+  path="$(abspath "$spec")"
+  path="${path%/}"; [ -n "$path" ] || path="/"
+  # Lima fails the mount at boot rather than at create time, so a typo here would
+  # otherwise surface as a VM that starts and then has no such directory.
+  [ -d "$path" ] || die "--mount: no such directory '$spec'"
+  local m
+  for m in ${MOUNTS+"${MOUNTS[@]}"}; do
+    if [ "${m%:w}" = "$path" ]; then return 0; fi   # limactl rejects duplicate locations
+  done
+  MOUNTS+=("$path${mode:+:$mode}")
+}
+
+# Mounts you always want, so you don't retype them for every VM. Blank lines and
+# # comments ignored; same "<dir>[:ro]" syntax as the flag.
+load_default_mounts() {
+  [ -r "$MOUNTS_FILE" ] || return 0
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    if [ -n "$line" ]; then add_mount "$line"; fi
+  done < "$MOUNTS_FILE"
+  return 0   # a trailing blank line would otherwise make the loop (and us) return 1
+}
+
 cmd="${1:-}"; [ $# -gt 0 ] && shift || true
 
 # Checked after --help so the usage text still works on a box without Lima.
@@ -71,7 +126,8 @@ case "$cmd" in
   new|create)
     name="${1:-}"; [ -n "$name" ] && [ "${name#-}" = "$name" ] || die "usage: vm new <name> [options]"
     shift
-    cpus=""; memory=""; disk=""; repo=""; ref=""; ctx=""
+    cpus=""; memory=""; disk=""; repo=""; ref=""
+    persist="$DEFAULT_PERSIST"; use_default_mounts=1
     while [ $# -gt 0 ]; do
       case "$1" in
         # Commas become spaces so `--profile k8s,vpn` and `--profile k8s --profile vpn`
@@ -84,12 +140,16 @@ case "$cmd" in
           _v="${2:?--features needs a value}"
           for _f in ${_v//,/ }; do add_feature "$_f"; done
           shift 2 ;;
+        # Paths can contain commas, so --mount does NOT split on them.
+        --mount|-m) add_mount "${2:?--mount needs a directory}"; shift 2 ;;
+        --no-mounts)  use_default_mounts=0; shift ;;
+        --persist)    persist="${2:?--persist needs a directory}"; shift 2 ;;
+        --no-persist) persist=""; shift ;;
         --cpus)    cpus="${2:?}"; shift 2 ;;
         --memory)  memory="${2:?}"; shift 2 ;;
         --disk)    disk="${2:?}"; shift 2 ;;
         --repo)    repo="${2:?}"; shift 2 ;;
         --ref)     ref="${2:?}"; shift 2 ;;
-        --atuin-ctx) ctx="${2:?}"; shift 2 ;;
         *) die "unknown option '$1'" ;;
       esac
     done
@@ -98,17 +158,39 @@ case "$cmd" in
     [ -n "$FEATURES" ] || add_feature core
     features="$(canonical_features)"
 
+    [ "$use_default_mounts" = 1 ] && load_default_mounts
+
+    # We own this directory, so create it rather than making the user do it first.
+    # 0700 because it ends up holding session tokens and API keys.
+    if [ -n "$persist" ]; then
+      persist="$(abspath "$persist")"; persist="${persist%/}"
+      mkdir -p "$persist" && chmod 700 "$persist"
+      add_mount "$persist:w"
+    fi
+
     # --param is rejected outright for keys the template does not declare, so a
     # typo here fails loudly at create time rather than silently doing nothing.
     set -- --name="$name" --param "Features=$features"
     [ -n "$repo" ] && set -- "$@" --param "Repo=$repo"
     [ -n "$ref" ]  && set -- "$@" --param "Ref=$ref"
-    [ -n "$ctx" ]  && set -- "$@" --param "AtuinCtx=$ctx"
+    # Lima keeps the host path inside the guest, so this is also the guest path.
+    [ -n "$persist" ] && set -- "$@" --param "PersistDir=$persist"
     [ -n "$cpus" ]   && set -- "$@" --cpus="$cpus"
     [ -n "$memory" ] && set -- "$@" --memory="$memory"
     [ -n "$disk" ]   && set -- "$@" --disk="$disk"
+    # --mount appends to the template's mounts (and de-dupes by location); it may
+    # NOT be combined with --mount-none, which is why the template ships without a
+    # home mount instead of us clearing one here.
+    for _m in ${MOUNTS+"${MOUNTS[@]}"}; do set -- "$@" --mount "$_m"; done
 
     echo "==> vm: creating '$name' (features: $features)"
+    # ${MOUNTS[*]-} rather than ${#MOUNTS[@]}: macOS still ships bash 3.2, where an
+    # empty array under `set -u` is a minefield.
+    if [ -n "${MOUNTS[*]-}" ]; then
+      printf '    mounts: %s\n' "${MOUNTS[*]}"
+    else
+      echo "    mounts: none (home is not shared — use --mount or $MOUNTS_FILE)"
+    fi
     # --tty=false: never drop into the interactive template picker.
     # The readiness probe in the template is what makes a failed bootstrap fail here.
     limactl start --tty=false "$@" "template://$TEMPLATE"
@@ -130,6 +212,37 @@ case "$cmd" in
     cfg="${LIMA_HOME:-$HOME/.lima}/$name/ssh.config"
     [ -f "$cfg" ] || die "no ssh config for '$name' — is it running?"
     exec ssh -F "$cfg" "lima-$name" "$@"
+    ;;
+
+  proxy)
+    # Browse the VM's network — including whatever its VPN tunnel reaches — from a
+    # browser on the Mac. An SSH dynamic forward is all it takes: the VM becomes a
+    # SOCKS5 proxy, so intranet sites resolve and connect from inside the tunnel
+    # while the rest of the Mac stays off the VPN.
+    #
+    # -D binds SOCKS on the Mac, and with a SOCKS5 proxy the browser hands over the
+    # HOSTNAME rather than an address, so DNS is resolved in the VM too — which is
+    # the whole point for split-horizon intranet names. (Chrome does this natively;
+    # in Firefox tick "Proxy DNS when using SOCKS v5". curl needs socks5h, not socks5,
+    # for the same reason.)
+    name="${1:?usage: vm proxy <name> [port]}"; port="${2:-1080}"
+    cfg="${LIMA_HOME:-$HOME/.lima}/$name/ssh.config"
+    [ -f "$cfg" ] || die "no ssh config for '$name' — is it running?"
+    cat <<EOF
+==> vm: SOCKS5 proxy for '$name' on 127.0.0.1:$port (Ctrl-C to stop)
+
+    Point something at it:
+      Chrome   open -na "Google Chrome" --args --user-data-dir=/tmp/chrome-$name \\
+                 --proxy-server="socks5://127.0.0.1:$port"
+      Firefox  Settings > Network > Manual, SOCKS v5, 127.0.0.1:$port, "Proxy DNS" on
+      curl     curl -x socks5h://127.0.0.1:$port https://intranet.example.com
+
+    A separate --user-data-dir keeps this out of your normal Chrome profile, so
+    only that window goes through the VPN.
+
+EOF
+    # -N: no remote command, this is a tunnel only.
+    exec ssh -F "$cfg" -N -D "127.0.0.1:$port" "lima-$name"
     ;;
 
   *) die "unknown command '$cmd' (try: vm --help)" ;;

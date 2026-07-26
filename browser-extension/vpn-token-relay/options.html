@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Cisco VPN token relay</title>
+    <style>
+      body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 2rem; max-width: 34rem; }
+      label { display: block; margin: 1rem 0 0.2rem; font-weight: 600; }
+      input { width: 100%; padding: 0.4rem; font: inherit; box-sizing: border-box; }
+      p.hint { color: #666; margin: 0.2rem 0 0; font-size: 0.9em; }
+      button { margin-top: 1.4rem; padding: 0.5rem 1rem; font: inherit; }
+      #status { margin-left: 0.8rem; color: #1a7f37; }
+    </style>
+  </head>
+  <body>
+    <h1>Cisco VPN token relay</h1>
+    <p>
+      When the VPN gateway sets its SAML session cookie, this sends it to
+      <code>openconnect-saml</code> waiting on loopback in your Lima VM.
+    </p>
+
+    <label for="host">VPN gateway host</label>
+    <input id="host" placeholder="vpn.unisg.ch" />
+    <p class="hint">Hostname only, no scheme or path. Changing this asks for permission to read that site's cookies.</p>
+
+    <label for="cookieName">Token cookie name</label>
+    <input id="cookieName" placeholder="acSamlv2Token" />
+    <p class="hint">Whatever the gateway advertises as <code>sso-v2-token-cookie-name</code>.</p>
+
+    <label for="port">Callback port</label>
+    <input id="port" type="number" placeholder="29786" />
+    <p class="hint">The port <code>cisco-vpn sso</code> printed. A few ports above this are tried too.</p>
+
+    <button id="save">Save</button><span id="status"></span>
+
+    <script src="options.js"></script>
+  </body>
+</html>

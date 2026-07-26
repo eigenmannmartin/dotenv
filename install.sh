@@ -21,12 +21,8 @@ if ! command -v chezmoi >/dev/null 2>&1; then
   fi
 fi
 
-# sourceDir is emitted by home/.chezmoi.toml.tmpl, not written here. `chezmoi init`
-# overwrites ~/.config/chezmoi/chezmoi.toml wholesale once a config template exists,
-# so anything written here beforehand would be destroyed a moment later — and the
-# resulting config would have no sourceDir, breaking every later bare `chezmoi apply`
-# with "stat ~/.local/share/chezmoi: no such file or directory". Letting the template
-# own it also refreshes sourceDir automatically when the repo is re-cloned elsewhere.
+# No chezmoi.toml is written here on purpose: `chezmoi init` overwrites it wholesale
+# a moment later. home/.chezmoi.toml.tmpl owns it — see the comment there.
 
 # .chezmoiroot points chezmoi at home/
 # --force only where chezmoi could not have prompted anyway. Managed files drift (nvim

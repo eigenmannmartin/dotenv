@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Cisco VPN token relay",
+  "version": "1.0.0",
+  "description": "Hands the Cisco SAML session token from your browser to openconnect running in a headless VM.",
+  "permissions": ["cookies", "storage", "notifications"],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://vpn.unisg.ch/*"
+  ],
+  "optional_host_permissions": ["https://*/*"],
+  "background": { "service_worker": "background.js" },
+  "icons": { "128": "icon128.png" },
+  "action": {
+    "default_title": "Relay the VPN token now",
+    "default_icon": { "128": "icon128.png" }
+  },
+  "options_page": "options.html"
+}

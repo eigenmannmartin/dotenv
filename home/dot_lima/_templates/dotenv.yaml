@@ -10,14 +10,35 @@
 # Every knob is a param, because `limactl --param K=V` is REJECTED unless the
 # template declares K here. Params arrive in provision scripts as $PARAM_<K>.
 minimumLimaVersion: "1.1.0"
-base: template:ubuntu
+
+# NOT `template://ubuntu` — that is `_images/ubuntu` + `_default/mounts`, and the
+# latter shares your whole home directory into the guest. Basing on the image alone
+# is the only way to opt out: a child template CANNOT unset an inherited mount
+# (`mounts: []` merges to no effect, verified), and `limactl --mount-none` is
+# rejected alongside `--mount`, so it cannot be undone from the CLI either. `vm`
+# appends exactly the directories you ask for with --mount.
+base: template://_images/ubuntu
+
+mounts:
+# Lima's own scratch dir. Not user data, and some lima subcommands stage files
+# through it, so it is the one default mount worth keeping.
+- location: "{{.GlobalTempDir}}/lima"
+  mountPoint: /tmp/lima
+  writable: true
+
+ssh:
+  # Forward the host SSH agent — on the Mac that is 1Password's, so git push and
+  # SSH commit signing work in the VM with no key material ever entering it.
+  forwardAgent: true
 
 param:
   Features: "core"
   Repo: "https://github.com/eigenmannmartin/dotenv.git"
   Ref: "main"
-  # Empty = use the instance name, so each VM gets its own atuin history by default.
-  AtuinCtx: ""
+  # Host path of the shared login store, mounted writable by `vm` (Lima keeps the
+  # host path in the guest, so this doubles as the guest path). Empty = not shared,
+  # and every login in this VM dies with it. See ~/.local/bin/dotenv-persist.
+  PersistDir: ""
 
 provision:
 # Root, before the user script: just enough to fetch the repo. Everything else is
@@ -48,13 +69,13 @@ provision:
       git clone --branch "$PARAM_Ref" "$PARAM_Repo" "$SRC"
     fi
 
-    # Per-VM atuin history, read by ~/.zshrc at shell start. Defaults to the
-    # instance name so `vm new hsg` gets a history that is not your laptop's.
-    # Lima sets the guest hostname to lima-<instance>, so strip that prefix —
-    # otherwise every context would be named "lima-…" instead of what you typed.
-    ctx="${PARAM_AtuinCtx:-}"
-    if [ -z "$ctx" ]; then ctx="$(hostname -s)"; ctx="${ctx#lima-}"; fi
-    printf '%s\n' "$ctx" > "$HOME/.config/dotenv/atuin-ctx"
+    # Where the shared logins live, for dotenv-persist. Written before install.sh so
+    # the chezmoi run_after script can link them in the same pass.
+    if [ -n "${PARAM_PersistDir:-}" ]; then
+      printf '%s\n' "$PARAM_PersistDir" > "$HOME/.config/dotenv/persist-dir"
+    else
+      rm -f "$HOME/.config/dotenv/persist-dir"
+    fi
 
     # install.sh freezes DOTENV_FEATURES into ~/.config/chezmoi/chezmoi.toml, so
     # later bare `chezmoi apply` runs in this VM keep the same feature set.

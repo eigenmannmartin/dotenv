@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# dotenv-persist — keep logins alive across VM rebuilds.
+#
+# A Lima VM is disposable; the logins inside it are not. `vm new` mounts one small
+# host directory (default ~/.local/share/dotenv/vm-logins, path recorded in
+# ~/.config/dotenv/persist-dir) and this replaces the credential files in $HOME with
+# symlinks into it. Log in once, on any VM, and every VM after that is already
+# logged in — atuin, gh, claude, op.
+#
+#   dotenv-persist            link everything (idempotent; safe to re-run)
+#   dotenv-persist status     show what is shared, local, or not yet created
+#   dotenv-persist add PATH   also share $HOME/PATH from now on
+#
+# Re-run it after a login: a few tools replace a file by rename(), which swaps out
+# our symlink. This re-captures anything that came unlinked — the newer of the two
+# copies wins, and the loser is kept as .dotenv-bak rather than deleted.
+#
+# What is NOT shared, deliberately: atuin's history.db. SQLite over a virtiofs/sshfs
+# mount is a corruption risk, and it does not need sharing — the key and session
+# below are what let `atuin sync` pull the same history down into every VM.
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dotenv"
+DIR_FILE="$CONFIG_DIR/persist-dir"
+LIST_FILE="$CONFIG_DIR/persist-paths"
+
+die() { echo "dotenv-persist: $*" >&2; exit 1; }
+
+# Paths are relative to $HOME. A trailing / means "link the whole directory", which
+# is the robust choice when a tool rewrites files inside it atomically.
+DEFAULT_PATHS='
+.local/share/atuin/key
+.local/share/atuin/session
+.config/gh/hosts.yml
+.claude/.credentials.json
+.config/op/
+.config/dotenv/op-service-account-token
+'
+
+# One cleaned entry per line — comments, whitespace and blanks already gone, so the
+# consumers below can just read lines.
+paths() {
+  { if [ -r "$LIST_FILE" ]; then cat "$LIST_FILE"; else printf '%s' "$DEFAULT_PATHS"; fi; } \
+    | sed 's/#.*//' | tr -d '[:blank:]' | grep -v '^$' || true
+}
+
+persist_dir() {
+  [ -r "$DIR_FILE" ] || return 1
+  local d; d="$(head -1 "$DIR_FILE" | tr -d '[:space:]')"
+  [ -n "$d" ] || return 1
+  printf '%s' "$d"
+}
+
+safe_rel() {
+  case "$1" in
+    ""|/*|*..*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+link_one() {
+  local rel="$1" isdir=0
+  case "$rel" in */) isdir=1; rel="${rel%/}" ;; esac
+  safe_rel "$rel" || { echo "dotenv-persist: skipping unsafe path '$1'" >&2; return 0; }
+  local src="$HOME/$rel" dst="$PERSIST/$rel"
+
+  # Already ours and pointing at the right place — nothing to do.
+  if [ -L "$src" ] && [ "$(readlink "$src")" = "$dst" ]; then return 0; fi
+
+  mkdir -p "$(dirname "$dst")" "$(dirname "$src")"
+
+  if [ -e "$src" ] && [ ! -L "$src" ]; then
+    if [ ! -e "$dst" ]; then
+      mv "$src" "$dst"                       # first login: capture it
+      echo "  captured $rel"
+    elif [ "$isdir" = 0 ] && [ "$src" -nt "$dst" ]; then
+      # This VM has the newer credential — which is the normal case when a tool
+      # rotated it by rename() and clobbered our symlink. Promote it, or we would
+      # quietly restore the token the login just replaced.
+      mv "$dst" "$dst.dotenv-bak"
+      mv "$src" "$dst"
+      echo "  captured newer $rel (previous shared copy: $rel.dotenv-bak)"
+    else
+      # Shared copy is newer (or it is a directory, which cannot be merged).
+      # Never throw the local one away silently — a stale .bak beats a lost token.
+      mv "$src" "$src.dotenv-bak"
+      echo "  local $rel kept as $rel.dotenv-bak (shared copy is newer)"
+    fi
+  else
+    rm -f "$src"                             # dangling or stale symlink
+  fi
+
+  # A dangling symlink is intentional when neither side exists yet: the parent dir
+  # is there, so the tool's first write follows the link and lands on the host.
+  if [ "$isdir" = 1 ] && [ ! -e "$dst" ]; then mkdir -p "$dst"; fi
+  ln -sfn "$dst" "$src"
+}
+
+PERSIST=""
+if ! PERSIST="$(persist_dir)"; then
+  case "${1:-link}" in
+    status) echo "not shared — no $DIR_FILE (VM created with --no-persist?)"; exit 0 ;;
+    *)      exit 0 ;;   # a plain Mac / devcontainer: nothing to do, not an error
+  esac
+fi
+[ -d "$PERSIST" ] || die "persist dir '$PERSIST' is not mounted — is the VM's mount up?"
+
+case "${1:-link}" in
+  link)
+    echo "==> dotenv-persist: sharing logins via $PERSIST"
+    while IFS= read -r rel; do
+      link_one "$rel"
+    done <<EOF
+$(paths)
+EOF
+    ;;
+
+  status)
+    printf '%-46s %s\n' "PATH" "STATE"
+    while IFS= read -r rel; do
+      rel="${rel%/}"
+      if [ -L "$HOME/$rel" ] && [ "$(readlink "$HOME/$rel")" = "$PERSIST/$rel" ]; then
+        [ -e "$HOME/$rel" ] && printf '%-46s %s\n' "$rel" "shared" \
+                            || printf '%-46s %s\n' "$rel" "shared (not created yet)"
+      elif [ -e "$HOME/$rel" ]; then
+        printf '%-46s %s\n' "$rel" "LOCAL — run: dotenv-persist"
+      else
+        printf '%-46s %s\n' "$rel" "absent"
+      fi
+    done <<EOF
+$(paths)
+EOF
+    ;;
+
+  add)
+    rel="${2:?usage: dotenv-persist add <path relative to \$HOME>}"
+    safe_rel "${rel%/}" || die "'$rel' must be relative to \$HOME and must not contain '..'"
+    if [ ! -r "$LIST_FILE" ]; then
+      # Materialise the defaults first. NOT `paths > "$LIST_FILE"`: the redirect
+      # creates the file before paths() runs, so paths() would read it back empty
+      # and the defaults would be silently dropped.
+      defaults="$(paths)"
+      { echo "# Files shared between VMs by dotenv-persist, relative to \$HOME."
+        echo "# A trailing / means link the whole directory."
+        printf '%s\n' "$defaults"; } > "$LIST_FILE"
+    fi
+    grep -qxF "$rel" "$LIST_FILE" || printf '%s\n' "$rel" >> "$LIST_FILE"
+    link_one "$rel"
+    echo "==> added $rel to $LIST_FILE"
+    ;;
+
+  -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$1' (link|status|add)" ;;
+esac

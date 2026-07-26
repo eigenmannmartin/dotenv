@@ -87,8 +87,60 @@ It drives [`~/.lima/_templates/dotenv.yaml`](home/dot_lima/_templates/dotenv.yam
 passing the profile as a Lima `param`. The VM clones this repo on first boot and
 runs `install.sh` with the matching `DOTENV_FEATURES`. A readiness probe is what
 makes a failed bootstrap actually fail `vm new` — a failing Lima provision script
-otherwise only logs a warning and leaves you with a half-built VM. Each VM also gets
-its own **atuin history**, named after the instance (see below).
+otherwise only logs a warning and leaves you with a half-built VM.
+
+### Mounts — your home directory is not shared
+
+```sh
+vm new work --mount ~/code --mount ~/notes:ro   # writable unless you say :ro
+vm new work --no-mounts                         # not even the defaults
+printf '~/code\n~/notes:ro\n' > ~/.config/dotenv/vm-mounts   # the ones you always want
+```
+
+The template bases on `template://_images/ubuntu`, **not** `template://ubuntu` —
+the latter pulls in `_default/mounts`, which shares all of `~`. That is the only way
+to opt out: a child template cannot unset an inherited mount (`mounts: []` merges to
+no effect), and `limactl --mount-none` is rejected when combined with `--mount`, so
+it cannot be undone from the CLI either.
+
+Two consequences worth knowing: `limactl shell` can no longer land you in the host
+cwd unless that directory happens to be mounted (it warns and drops you in `$HOME`),
+and **existing VMs keep the mounts they were created with** — only new ones are
+affected.
+
+### Browse through a VM's VPN
+
+```sh
+vm proxy hsg          # SOCKS5 on 127.0.0.1:1080, printing ready-made browser commands
+```
+
+An SSH dynamic forward into the VM. With SOCKS5 the browser hands over the *hostname*
+rather than an address, so DNS resolves inside the VM too — which is what makes
+split-horizon intranet names work while the rest of the Mac stays off the VPN.
+
+### Logins that survive a rebuild
+
+`vm new` mounts one small host directory (default `~/.local/share/dotenv/vm-logins`,
+`--persist` / `--no-persist`) and
+[`dotenv-persist`](home/dot_local/bin/executable_dotenv-persist) symlinks the
+credential files into it. Log in once, on any VM; every VM after that starts logged
+in.
+
+```sh
+dotenv-persist            # link everything (runs automatically on every chezmoi apply)
+dotenv-persist status     # shared / local / not created yet
+dotenv-persist add .aws/credentials
+```
+
+Shared by default: atuin's `key` + `session`, `gh/hosts.yml`,
+`.claude/.credentials.json`, `.config/op/`, and the 1Password service-account token.
+Deliberately **not** shared: atuin's `history.db` — SQLite over a virtiofs/sshfs
+mount risks corruption, and it doesn't need sharing, since the key and session are
+what let `atuin sync` pull the same history into every VM.
+
+Re-run it after a login: some tools replace a file by `rename()`, which swaps out the
+symlink. Re-running re-captures whatever came unlinked — newer file wins, and the one
+that loses is kept as `.dotenv-bak` rather than deleted.
 
 ## What's managed today
 
@@ -103,6 +155,9 @@ its own **atuin history**, named after the instance (see below).
 | `~/.config/nvim` | **LazyVim** + Catppuccin Macchiato + **lang extras** (Go/Py/Docker/k8s/Helm/Dart + DAP); `lazy-lock` pinned |
 | `~/.config/atuin/config.toml` | atuin shell history — **synced to the home-network server** (set `sync_address`) |
 | `~/.config/{k9s,lazygit,gh-dash,direnv}` | k9s (blue skin + full logs), lazygit & gh-dash themes, direnv `use_op` secrets helper |
+| `~/.config/dotenv/secrets.env` | `op://` references for [`secrets`](#secrets-into-env-vars-and-logins) — **created once, never overwritten** |
+| `~/.local/bin/{secrets,dotenv-persist}` | 1Password → env/logins, and logins shared across VM rebuilds |
+| `~/.lima/_templates/dotenv.yaml` + `~/.local/bin/vm` | [Lima VMs](#lima-vms) — **host-only** |
 
 ## Per-project prompt badge
 
@@ -183,26 +238,9 @@ Linux only neovim/node/jq/direnv/btop/lazygit arrive, the rest stay macOS-only:
 
 **atuin sync** — shell history syncs to a self-hosted server on the home network.
 Set `sync_address` in [`atuin/config.toml`](home/dot_config/atuin/config.toml), then
-once per context: `atuin login -u <user> -k <key>` (key/pass in 1Password) + `atuin sync`.
-
-**atuin contexts** — separate, switchable histories out of that one config, so a
-scratch VM or a client project doesn't pollute your main history:
-
-```sh
-atuin-ctx            # which context is this shell in?   (default)
-atuin-ctx ls         # list them
-atuin-ctx work       # switch this shell to "work"
-atuin-ctx -          # back to the default history
-```
-
-Each context is a full store of its own under `~/.local/share/atuin-ctx/<name>` —
-isolation is total, and since each has its own encryption key, `atuin login`/`sync`
-is per-context too (which is what keeps them separate on the server as well). The
-switch rides on `ATUIN_DATA_DIR`, deliberately: it relocates the whole store and is
-the one atuin setting where the environment beats `config.toml`, so unlike
-`ATUIN_DB_PATH` it can't be silently overridden later. A machine's default context
-comes from `~/.config/dotenv/atuin-ctx` — which is what `vm new` writes, giving every
-VM its own history automatically.
+`secrets login atuin` (see [1Password](#1password)) — or by hand,
+`atuin login -u <user> -k <key>` + `atuin sync`. One history everywhere; the login
+itself survives VM rebuilds via [`dotenv-persist`](#logins-that-survive-a-rebuild).
 
 ## Dev Containers
 
@@ -282,11 +320,19 @@ calls back to localhost.** Unlike the external-browser flow, the ASA ends the lo
 on its own page (`sso-v2-login-final`) and leaves the token in the *browser* as the
 cookie named by `sso-v2-token-cookie-name` — `acSamlv2Token` on HSG, and not
 HttpOnly. So `cisco-vpn sso` prints the login URL (also OSC 52'd to your clipboard)
-and then relays that cookie into openconnect-saml's waiting callback server, either
-via a **bookmarklet** it prints for you — one click on the Mac, no typing — or from
-a value you paste. openconnect-saml then does the `auth-reply` POST that swaps the
-SAML token for the real `webvpn` session cookie, which is what openconnect consumes.
-The session cookie never hits your terminal.
+and then relays that cookie into openconnect-saml's waiting callback server.
+openconnect-saml then does the `auth-reply` POST that swaps the SAML token for the
+real `webvpn` session cookie, which is what openconnect consumes. The session cookie
+never hits your terminal.
+
+**Automating that last inch** — load
+[`browser-extension/vpn-token-relay`](browser-extension/vpn-token-relay) as an
+unpacked extension in Chrome on the Mac (`chrome://extensions` → Developer mode →
+Load unpacked). It watches for the token cookie on the gateway and POSTs it to the
+callback itself, so the login is hands-free: open the URL, authenticate, tunnel up.
+It can read cookies for the configured gateway only, and sends to loopback only.
+Falling back: `cisco-vpn sso` still prints a one-click **bookmarklet**, and still
+accepts a pasted token.
 
 `cisco-vpn cookie` is the same handoff from a cookie you obtained some other way.
 
@@ -294,6 +340,35 @@ Ctrl-C on an SSO session logs out server-side and burns the cookie — rerun to
 reconnect. And the zero-setup alternative remains: connect on the Mac with Cisco
 Secure Client, since Lima's user-mode networking re-originates guest traffic as
 host traffic, so the VM rides the host tunnel, DNS included.
+
+To use the tunnel the *other* way — a browser on the Mac reaching intranet sites
+through the VM — see [`vm proxy`](#browse-through-a-vms-vpn).
+
+### Restricting what goes through the tunnel
+
+```sh
+cisco-vpn sso vpn.unisg.ch/priv --routes 10.1.0.0/16,192.168.50.0/24
+printf '10.1.0.0/16\n192.168.50.0/24\n' > ~/.config/dotenv/vpn-routes   # or set it once
+cisco-vpn sso vpn.unisg.ch/priv --no-vpn-dns    # keep this VM's resolver too
+```
+
+openconnect passes the head-end's config to `vpnc-script` through the environment,
+and `vpnc-script` installs one route per `CISCO_SPLIT_INC_<n>_*` triple — falling back
+to a **default route through the tunnel** when `CISCO_SPLIT_INC` is unset. So
+`--routes` generates a shim that overwrites those variables and then `exec`s the real
+`vpnc-script`. That beats fixing up `ip route` after the fact: there's no race, and it
+re-applies on every reconnect. Setting a *lower* count also masks any extra ranges the
+server pushed, since the loop only reads indices below it — and it narrows a
+full-tunnel group just as well as a split one.
+
+`--no-vpn-dns` additionally unsets `INTERNAL_IP4_DNS`/`CISCO_DEF_DOMAIN`, because
+`vpnc-script` otherwise replaces `resolv.conf` wholesale and sends *every* lookup in
+the VM to the corporate resolver — much wider than the routes you just restricted.
+The trade is that intranet hostnames stop resolving, so you'd address those by IP.
+
+Routes are resolved from `--routes`, then `$CISCO_VPN_ROUTES`, then
+`~/.config/dotenv/vpn-routes` (`#` comments allowed), and are validated before
+anything connects. Applies to all three modes — plain, `sso` and `cookie`.
 
 ## Neovim (LazyVim)
 
@@ -322,9 +397,40 @@ live in `lua/plugins/` (e.g.
 ## 1Password
 
 - SSH auth uses the 1Password agent (`SSH_AUTH_SOCK`, guarded so the forwarded
-  agent wins inside containers).
+  agent wins inside containers). Lima VMs get it too — the template sets
+  `ssh.forwardAgent`, so `git push` and SSH commit signing work in a VM without any
+  key material ever entering it.
 - Commit signing uses `gpg.format = ssh` + 1Password's `op-ssh-sign` (see
   [`git/1password-signing.gitconfig`](git/1password-signing.gitconfig)).
+
+### Secrets into env vars and logins
+
+[`secrets`](home/dot_local/bin/executable_secrets) resolves `op://` references at the
+moment you need them — nothing is written to disk, nothing lingers in your shell:
+
+```sh
+secrets run -- terraform apply    # command runs with every ref exported
+secrets shell                     # subshell with them exported
+secrets get GH_TOKEN              # one value
+secrets login atuin|gh|all        # drive a tool's login with them
+secrets ls | secrets check
+```
+
+The map lives in `~/.config/dotenv/secrets.env` — plain `NAME=op://vault/item/field`
+lines, no secret values, so it is safe to read and safe to keep. chezmoi *creates* it
+once and then leaves it alone, so your edits stick.
+
+**Auth in a headless VM**: `op` there can use neither Touch ID nor the desktop app,
+so use a 1Password **service account** — drop its token in
+`~/.config/dotenv/op-service-account-token` (chmod 600) and everything above is
+non-interactive. `dotenv-persist` shares that file across VMs, so you paste it once,
+ever. `secrets` reads it per-invocation and passes it only to `op`, so the token is
+never in the ambient environment. Without one, `op` falls back to prompting.
+
+`secrets login` runs `dotenv-persist` afterwards, so a fresh login is immediately
+captured into the shared store and the next VM starts out logged in. `op` itself is
+installed on first use (the signed 1Password apt repo on Debian/Ubuntu, the cask on
+macOS), which keeps it off the critical path of a fast VM build.
 
 ## Dependencies & platforms
 
