@@ -153,7 +153,7 @@ unrelated ssh. `status` cleans up sockets whose ssh has died (the file outlives 
 **When intranet pages stop loading**, one of two links is down, and each now looks
 after itself. A Mac sleep tends to leave the ssh master *wedged* — socket present,
 nothing flowing — so the proxy runs with `ServerAliveInterval=15` /
-`CountMax=4`: a wedged master turns into a dead one within a minute, and
+`ServerAliveCountMax=4`: a wedged master turns into a dead one within a minute, and
 `vm proxy ensure hsg` (idempotent, reuses the previous port) puts it back. If the
 proxy is up but VPN targets are still unreachable, the tunnel *inside* the VM is
 what's wedged — the VM-side watchdog heals that on its own within a couple of
@@ -569,14 +569,24 @@ type by hand — suspend && resume — and `install-service` now also installs
 sweeps 8s apart count as wedged (one blip doesn't bounce the tunnel), the reconnect
 goes through `systemctl restart cisco-vpn` (whose `KillSignal=SIGHUP` makes a
 restart literally suspend+resume, and keeps openconnect out of the timer's own
-soon-to-be-torn-down cgroup), and the result is verified by probing again. After
-**3 failed heals in a row** the watchdog parks itself — the session has almost
-always expired server-side, which only a human with a browser can fix — and
-`cisco-vpn status` shows why; a manual `heal`, a `resume`, or a fresh `sso` login
-resets it. A deliberate `cisco-vpn suspend` is remembered and never "fixed".
-Connections also pass `--force-dpd 30` now, so openconnect's own dead-peer
-detection catches most wedges within 30s and reconnects on the same cookie; the
-watchdog is the backstop for the states DPD sleeps through.
+soon-to-be-torn-down cgroup), and the result is verified by probing again — with
+the saved session carrying its `--routes`/`--no-vpn-dns` narrowing along, so an
+automatic resume never silently widens into a full tunnel.
+
+The watchdog also knows what is *not* a wedge, and leaves those alone: while the
+**gateway itself is unreachable** it just waits — the uplink is down (Mac asleep,
+cable out), a reconnect can't help, and no strike is recorded, so a transient
+outage never turns into a give-up; a young openconnect with no tun device yet is a
+**login in progress** (10-minute grace); `cisco-vpn suspend` and `systemctl stop
+cisco-vpn` are **deliberate** (respected until you `resume`/`start` — a reboot
+still resumes, as before: that's the boot unit's job); and auto-reconnects are
+capped at **3 per hour**, so a flaky probe target can't bounce a healthy tunnel
+all day. After **3 failed heals in a row** it parks itself — the session has
+almost always expired server-side, which only a human with a browser can fix —
+and `cisco-vpn status` shows why; a manual `heal`, a `resume`, or a fresh `sso`
+login resets it. Connections also pass `--force-dpd 30` now, so openconnect's own
+dead-peer detection catches most wedges within 30s and reconnects on the same
+cookie; the watchdog is the backstop for the states DPD sleeps through.
 
 `status` reads the tunnel device from `/sys/class/net/<dev>/statistics` and finds the
 process by pid file, falling back to a process scan so a foreground session is still

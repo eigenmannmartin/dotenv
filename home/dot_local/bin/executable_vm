@@ -357,7 +357,9 @@ case "$cmd" in
               "$(printf '%s' "$out" | tr -d '\n')"
           else
             # The VM was stopped or the ssh died; the socket file outlives both.
-            rm -f "$(proxy_ctl "$n")" "$(proxy_port_file "$n")"
+            # The .port file stays — it is ensure's memory of where the proxy
+            # last ran; only an explicit `stop` forgets it.
+            rm -f "$(proxy_ctl "$n")"
           fi
         done <<EOF
 $(proxy_names)
@@ -384,7 +386,8 @@ EOF
         # Idempotent start, for "pages stopped loading" muscle memory and for
         # anything periodic — alive is a silent success, dead is replaced.
         shift
-        psub="${1:-}"; [ -n "$psub" ] || die "usage: vm proxy ensure <name> [port]"
+        psub="${1:-}"
+        [ -n "$psub" ] && [ "${psub#-}" = "$psub" ] || die "usage: vm proxy ensure <name> [port]"
         ensure=1 ;;
     esac
 
@@ -398,10 +401,11 @@ EOF
       esac
     done
     [ "$ensure" = 1 ] && [ "$foreground" = 1 ] && die "ensure runs in the background"
+    req_port="$port"   # what the CALLER asked for; empty = no preference
     if [ -z "$port" ]; then
       # ensure reuses the port the proxy last ran on, so it comes back exactly
       # where the browser already expects it.
-      [ "$ensure" = 1 ] && port="$(cat "$(proxy_port_file "$psub")" 2>/dev/null || true)"
+      [ "$ensure" = 1 ] && port="$(cat "$(proxy_port_file "$name")" 2>/dev/null || true)"
       [ -n "$port" ] || port=1080
     fi
     cfg="$(proxy_cfg "$name")"
@@ -409,7 +413,15 @@ EOF
 
     if [ "$foreground" = 0 ]; then
       if proxy_alive "$name" >/dev/null 2>&1; then
-        [ "$ensure" = 1 ] && { echo "==> vm: proxy for '$name' already up (127.0.0.1:$(cat "$(proxy_port_file "$name")" 2>/dev/null || echo '?'))"; exit 0; }
+        if [ "$ensure" = 1 ]; then
+          cur="$(cat "$(proxy_port_file "$name")" 2>/dev/null || echo '?')"
+          # "ensure on :9090" while it runs on :1080 must not exit 0 — a caller
+          # would then point curl/browser at a port nothing listens on.
+          [ -n "$req_port" ] && [ "$req_port" != "$cur" ] \
+            && die "proxy for '$name' is already up on 127.0.0.1:$cur, not :$req_port — vm proxy stop $name first"
+          echo "==> vm: proxy for '$name' already up (127.0.0.1:$cur)"
+          exit 0
+        fi
         die "a proxy for '$name' is already running (vm proxy status)"
       fi
       # A unix socket path is capped at ~104 bytes by the kernel, and ssh fails with a
