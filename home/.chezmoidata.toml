@@ -21,6 +21,7 @@
 #   vpn      openconnect + openconnect-saml (the cisco-vpn command)
 #   ai       claude + codex + backlog (npm)
 #   docker   docker engine inside a Linux VM (macOS gets it from OrbStack via dev)
+#   flutter  fvm + cocoapods for Flutter/iOS work (macOS only; Xcode from the App Store)
 #
 # Choose per machine with:  DOTENV_FEATURES=core,devlite ./install.sh
 features = ["core", "dev", "k8s", "vpn"]

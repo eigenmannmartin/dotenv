@@ -21,6 +21,10 @@ set -uo pipefail
 {{- $vpn := has "vpn" .features }}
 {{- $ai := has "ai" .features }}
 {{- $docker := has "docker" .features }}
+{{/* flutter installs nothing on Linux, deliberately: Xcode and the simulators exist
+     only on macOS, and a Lima VM drives them over ssh (see Brewfile.flutter) rather
+     than re-downloading a ~1.5 GB SDK into every throwaway box. */}}
+{{- $flutter := has "flutter" .features }}
 
 echo "==> dotenv: installing packages ({{ .chezmoi.os }}; features: {{ join "," .features }})"
 
@@ -114,7 +118,7 @@ npm_global_install() {   # <package> [min-node-major]
 if have brew; then
   # --no-upgrade: install only what's missing; don't churn already-installed tools.
   # Brewfile.<feature> files are additive; a missing one is simply skipped.
-  for _bf in Brewfile {{ if $devlite }}Brewfile.devlite{{ end }} {{ if $dev }}Brewfile.dev{{ end }} {{ if $k8s }}Brewfile.k8s{{ end }}; do
+  for _bf in Brewfile {{ if $devlite }}Brewfile.devlite{{ end }} {{ if $dev }}Brewfile.dev{{ end }} {{ if $k8s }}Brewfile.k8s{{ end }} {{ if $flutter }}Brewfile.flutter{{ end }}; do
     _p="{{ .chezmoi.workingTree }}/$_bf"
     [ -f "$_p" ] || continue
     brew bundle --no-upgrade --file "$_p" || echo "WARN: brew bundle ($_bf) had failures"

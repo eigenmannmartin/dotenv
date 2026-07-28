@@ -52,7 +52,7 @@ sourceDir = {{ .chezmoi.sourceDir | dir | quote }}
 */ -}}
 {{/*  "devlite" is a strict subset of "dev", so it is deliberately NOT in $legacy: an
       old machine listing "dev" already gets everything devlite installs. */ -}}
-{{- $known := list "core" "devlite" "dev" "k8s" "vpn" "ai" "docker" -}}
+{{- $known := list "core" "devlite" "dev" "k8s" "vpn" "ai" "docker" "flutter" -}}
 {{- $legacy := list "core" "dev" "k8s" "vpn" -}}
 {{- $features := list "core" -}}
 {{- if and (stat .chezmoi.configFile) (not (hasKey . "features")) -}}

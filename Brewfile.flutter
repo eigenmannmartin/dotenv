@@ -1,0 +1,16 @@
+# dotenv macOS dependencies — "flutter" feature. Flutter/iOS toolchain for mobile work.
+# Pulled in when DOTENV_FEATURES contains "flutter". macOS-only by design: the iOS
+# half (Xcode, simulators, CocoaPods) does not exist anywhere else, and a Lima VM
+# drives it over ssh instead of installing its own SDK — a throwaway VM would
+# re-download ~1.5 GB of Flutter on every rebuild for builds it cannot ship.
+#
+# Xcode itself is NOT here: it comes from the App Store, and brew has no formula for
+# it. What ~/.zshenv does provide is DEVELOPER_DIR, so `xcrun simctl` works even
+# while xcode-select still points at CommandLineTools (fixing that needs sudo).
+#
+# The Flutter SDK is also not here on purpose: fvm owns it per project — `fvm install`
+# in a checkout reads .fvmrc and fetches the pinned version, so two projects never
+# fight over one global SDK.
+tap "leoafarias/fvm"
+brew "leoafarias/fvm/fvm"   # Flutter version manager — reads .fvmrc, run `fvm flutter …`
+brew "cocoapods"            # iOS dependency manager; `pod install` runs inside flutter build

@@ -51,6 +51,7 @@ DOTENV_FEATURES=core,dev,k8s,vpn ./install.sh # everything
 | `vpn` | openconnect + openconnect-saml → the [`cisco-vpn`](#cisco-vpn-entra-id-sso-from-the-lima-vm) command |
 | `ai` | Claude Code + Codex CLIs (`claude`, `codex`) + [Backlog.md](#backlogmd-boards) (`backlog`), via npm — implies `devlite` for node |
 | `docker` | docker engine + compose, so [devcontainers](#dev-containers) run in the VM itself |
+| `flutter` | fvm + CocoaPods for Flutter/iOS work — macOS only; the Flutter SDK itself is per-project (`fvm install` reads `.fvmrc`), Xcode from the App Store |
 
 `dev` is `devlite` plus everything container-shaped, split out because that half is the
 expensive one — OrbStack is a ~1 GB cask with a VM behind it, and a box you only edit
@@ -72,7 +73,8 @@ bootstraps), and the
 [package script](home/.chezmoiscripts/run_onchange_after_20-install-packages.sh.tmpl)
 skips the matching installs. On macOS the same split applies via
 [`Brewfile`](Brewfile) + [`Brewfile.devlite`](Brewfile.devlite) +
-[`Brewfile.dev`](Brewfile.dev) + [`Brewfile.k8s`](Brewfile.k8s); the per-feature files
+[`Brewfile.dev`](Brewfile.dev) + [`Brewfile.k8s`](Brewfile.k8s) +
+[`Brewfile.flutter`](Brewfile.flutter); the per-feature files
 are additive, so `Brewfile.dev` holds only what `dev` adds on top of `devlite`.
 
 ## Lima VMs
@@ -645,7 +647,11 @@ the default, so a plain apply installs the shell and nothing else:
   [`Brewfile.devlite`](Brewfile.devlite) adds neovim, node, jq/yq, gh, mise, direnv,
   lazygit, dust/duf/procs/btop; [`Brewfile.dev`](Brewfile.dev) layers the container
   half on top (**OrbStack** + lazydocker/ctop/dive);
-  [`Brewfile.k8s`](Brewfile.k8s) adds k9s/kubecolor/kubectx/stern/helm. OrbStack
+  [`Brewfile.k8s`](Brewfile.k8s) adds k9s/kubecolor/kubectx/stern/helm;
+  [`Brewfile.flutter`](Brewfile.flutter) adds fvm + CocoaPods for Flutter/iOS work
+  (macOS-only feature — Xcode comes from the App Store, and `~/.zshenv` exports
+  `DEVELOPER_DIR` so `xcrun simctl` works over ssh while `xcode-select` still points
+  at CommandLineTools). OrbStack
   replaces Docker Desktop and provides the `docker`/`docker compose`/`kubectl`
   CLIs; open the app once after install to finish CLI + helper setup.
 - **Debian/Ubuntu**: `apt` for the core set — zsh/tmux/git/ripgrep/fzf/bat (+ `eza`,

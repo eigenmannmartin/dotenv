@@ -17,3 +17,18 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$P
 if [ "$(uname -s)" = "Linux" ]; then
   case ":$PATH:" in *":/usr/sbin:"*) ;; *) export PATH="$PATH:/usr/sbin:/sbin" ;; esac
 fi
+
+# Homebrew's bin, for the same reason ~/.local/bin is here: `ssh mac 'fvm …'` from a
+# Lima VM runs neither .zprofile nor path_helper, so everything brew installs is
+# missing from exactly the invocations the VM uses to drive this machine. A literal
+# path rather than `brew shellenv`, so no subprocess runs in every zsh script.
+if [ -d /opt/homebrew/bin ]; then
+  case ":$PATH:" in *":/opt/homebrew/bin:"*) ;; *) export PATH="/opt/homebrew/bin:$PATH" ;; esac
+fi
+
+# xcode-select points at CommandLineTools and switching needs sudo; DEVELOPER_DIR is
+# the sudo-free override that lets `xcrun simctl` find the simulator tools — over ssh
+# too, which is why it lives here and not in .zprofile.
+if [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Applications/Xcode.app/Contents/Developer ]; then
+  export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+fi
