@@ -44,15 +44,26 @@ usage: cisco-vpn install                        one-time: openconnect (>= 9.00) 
 Running it as a service:
        cisco-vpn sso <gateway> -b               connect, then detach into the background
        cisco-vpn status [-v]                    connected? interface, routes, DNS, traffic
+       cisco-vpn health [-q]                    is traffic actually FLOWING through it?
+       cisco-vpn heal [--auto]                  …and suspend+resume it if not
        cisco-vpn suspend                        drop the tunnel but KEEP the session
        cisco-vpn resume [-b]                    reconnect from the saved session, no login
        cisco-vpn stop                           disconnect AND log out (discards the session)
-       cisco-vpn install-service                resume automatically on boot (systemd)
+       cisco-vpn install-service                resume on boot + minutely heal watchdog
 
 suspend/resume exist because of how openconnect handles signals: SIGINT logs the
 session off (the cookie dies), SIGHUP does not (the cookie stays usable). So `stop`
 is a real logout, while `suspend` — and a reboot via the systemd unit — leaves a
 session you can resume without touching a browser. Sessions still expire server-side.
+
+health exists because a host sleep often leaves the tunnel LOOKING up — process
+alive, tun0 present, routes installed — while nothing flows; only a probe through
+the tunnel tells those states apart. Targets come from $CISCO_VPN_PROBE or
+~/.config/dotenv/vpn-probe (host[:port], URL or dns:<ip>, one per line; any one
+answering = healthy) and default to the DNS servers the VPN itself pushed. heal is
+that probe plus the fix you would type by hand (suspend && resume); the watchdog
+timer installed by install-service runs it minutely, and after 3 failed attempts
+in a row it parks itself — status says so — until a manual heal/resume/sso.
 
 The gateway must come first; everything after it is passed through to openconnect
 (e.g. cisco-vpn vpn.example.com --authgroup=Employees). Ctrl-C disconnects.
@@ -187,8 +198,27 @@ PID_FILE="$STATE_DIR/vpn.pid"
 LOG_FILE="$STATE_DIR/vpn.log"
 SESSION_FILE="$STATE_DIR/vpn.session"
 
+# Watchdog state: tiny marker files next to the session. vpn.suspended = a human
+# took the tunnel down on purpose, vpn.strikes = consecutive failed heals,
+# vpn.blocked = the watchdog parked itself. The watchdog timer runs `heal` as root
+# with HOME pointed here, so anything root creates is handed straight back to the
+# home's owner — or the user could no longer manage (or even append to) their own
+# state files afterwards.
+own_state() {
+  [ "$(id -u)" -eq 0 ] || return 0
+  local u g
+  u="$(stat -c %u "$HOME" 2>/dev/null || true)"
+  { [ -n "$u" ] && [ "$u" != 0 ]; } || return 0
+  g="$(stat -c %g "$HOME" 2>/dev/null || echo "$u")"
+  chown "$u:$g" "$@" 2>/dev/null || true
+}
+mark()   { mkdir -p "$STATE_DIR"; printf '%s\n' "${2:-}" > "$STATE_DIR/$1"; own_state "$STATE_DIR" "$STATE_DIR/$1"; }
+unmark() { rm -f "$STATE_DIR/$1" 2>/dev/null || $SUDO rm -f "$STATE_DIR/$1" 2>/dev/null || true; }
+marked() { [ -e "$STATE_DIR/$1" ]; }
+
 save_session() {   # <host> <fingerprint> <cookie> <gateway-as-typed>
   mkdir -p "$STATE_DIR"
+  own_state "$STATE_DIR"
   # Create empty and lock down BEFORE writing: this file holds a live VPN session.
   ( umask 077; : > "$SESSION_FILE" )
   {
@@ -197,6 +227,9 @@ save_session() {   # <host> <fingerprint> <cookie> <gateway-as-typed>
     printf 'COOKIE=%q\n'      "$3"
     printf 'GATEWAY=%q\n'     "$4"
   } > "$SESSION_FILE"
+  own_state "$SESSION_FILE"
+  # A fresh login invalidates whatever made the watchdog park itself.
+  unmark vpn.blocked; unmark vpn.strikes; unmark vpn.suspended
 }
 
 # Sets VPN_PID_SOURCE so callers can tell "the session we started" from "some
@@ -236,7 +269,10 @@ vpn_dev() { ip -o link show type tun 2>/dev/null | awk -F': ' 'NR==1{print $2}';
 connect_with_cookie() {
   local host="$1" fp="${2:-}"
   setup_routes
-  set -- --cookie-on-stdin --useragent 'AnyConnect Linux_64 4.7.00136' --version-string 4.7.00136
+  # --force-dpd: most "up but nothing flows" states (host slept, NAT forgot us) are
+  # exactly what dead-peer detection exists for — openconnect notices within 30s and
+  # reconnects itself on the same cookie. The heal watchdog covers what DPD misses.
+  set -- --cookie-on-stdin --useragent 'AnyConnect Linux_64 4.7.00136' --version-string 4.7.00136 --force-dpd 30
   [ -n "$fp" ] && set -- "$@" --servercert "$fp"
   if [ "$BACKGROUND" = 1 ]; then
     if vpn_pid >/dev/null; then
@@ -244,9 +280,13 @@ connect_with_cookie() {
       return 1
     fi
     mkdir -p "$STATE_DIR"
+    own_state "$STATE_DIR"
     # The redirect is opened by THIS shell, so the log stays owned by us and readable
-    # without sudo even though openconnect goes on to run as root.
+    # without sudo even though openconnect goes on to run as root. When a root-run
+    # heal/boot resume is the first to create it, hand it to the user for the same
+    # reason (a later user-run `sso -b` must be able to append).
     ( umask 077; : >> "$LOG_FILE" )
+    own_state "$LOG_FILE"
     # -b forks only after the tunnel is up, so a non-zero exit here is a real failure.
     $SUDO openconnect --protocol=anyconnect -b --pid-file "$PID_FILE" \
       ${ROUTE_ARGS+"${ROUTE_ARGS[@]}"} "$@" "$host" >>"$LOG_FILE" 2>&1
@@ -264,6 +304,168 @@ human_bytes() {
     while (b >= 1024 && i < 5) { b /= 1024; i++ }
     printf (i == 1 ? "%d %s" : "%.1f %s"), b, u[i]
   }'
+}
+
+# ------------------------------------------------------------------ tunnel health
+# The failure all of this exists for: openconnect alive, tun0 present, routes
+# installed — and nothing flows (a host sleep is the usual cause). From the outside
+# that is indistinguishable from healthy, so the only real test is a probe THROUGH
+# the tunnel; the fix is what you would type by hand, suspend && resume.
+PROBE_TIMEOUT=5
+PROBE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/dotenv/vpn-probe"
+UNIT_FILE=/etc/systemd/system/cisco-vpn.service
+
+probe_tcp() {  # <host> <port> — completing the handshake is the whole test, and a
+               # hostname also exercises DNS resolution inside the VM on the way
+  timeout "$PROBE_TIMEOUT" bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$1" "$2" 2>/dev/null
+}
+probe_url() {  # transport is the test: any HTTP status counts, including 401/503.
+               # -k because reaching a self-signed intranet box still proves flow.
+  curl -ks -o /dev/null --noproxy '*' --max-time "$PROBE_TIMEOUT" "$1" 2>/dev/null
+}
+probe_dns() {  # <server> — any DNS response, REFUSED included, proves packets flow
+               # both ways (dig exits 0 on a response, 9 on silence). Without dig,
+               # a TCP connect to port 53 — not UDP, but the same path.
+  if have dig; then
+    dig +time=3 +tries=1 "@$1" . soa >/dev/null 2>&1
+  else
+    probe_tcp "$1" 53
+  fi
+}
+
+# The resolvers the VPN pushed are the one probe target that needs no configuration.
+# Both sources are filtered through `ip route get`: a nameserver NOT routed via the
+# tunnel (127.0.0.53, the LAN resolver, or DNS outside a --routes restriction) says
+# nothing about the tunnel and would only produce false heals.
+vpn_dns_servers() {  # <tun-dev>
+  local dev="$1" cand="" ns
+  [ -n "$dev" ] || return 0
+  if have resolvectl; then
+    cand="$(resolvectl dns "$dev" 2>/dev/null | sed 's/^[^:]*: *//' | tr ' ' '\n' | grep -E '^[0-9a-fA-F:.]+$' || true)"
+  fi
+  [ -n "$cand" ] || cand="$(awk '/^nameserver/{print $2}' /etc/resolv.conf 2>/dev/null || true)"
+  for ns in $cand; do
+    if ip route get "$ns" 2>/dev/null | grep -qE " dev $dev( |\$)"; then printf '%s\n' "$ns"; fi
+  done
+  return 0
+}
+
+# Fills PROBES (dns:<ip> | host[:port] | URL) and PROBE_SOURCE.
+collect_probes() {
+  PROBES=(); PROBE_SOURCE=""
+  local line ns
+  if [ -n "${CISCO_VPN_PROBE:-}" ]; then
+    for line in ${CISCO_VPN_PROBE//,/ }; do PROBES+=("$line"); done
+    PROBE_SOURCE='$CISCO_VPN_PROBE'
+  elif [ -r "$PROBE_FILE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%%#*}"
+      line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
+      if [ -n "$line" ]; then PROBES+=("$line"); fi
+    done < "$PROBE_FILE"
+    PROBE_SOURCE="$PROBE_FILE"
+  fi
+  if [ ${#PROBES[@]} -eq 0 ]; then
+    for ns in $(vpn_dns_servers "$(vpn_dev)"); do PROBES+=("dns:$ns"); done
+    PROBE_SOURCE="VPN-pushed DNS"
+  fi
+  return 0
+}
+
+probe_one() {
+  case "$1" in
+    http://*|https://*) probe_url "$1" ;;
+    dns:*)              probe_dns "${1#dns:}" ;;
+    *:*)                probe_tcp "${1%:*}" "${1##*:}" ;;
+    *)                  probe_tcp "$1" 443 ;;
+  esac
+}
+
+# Sets HEALTH_MSG; returns 0 traffic flows | 1 wedged | 2 not connected | 3 nothing
+# to probe with. Any single target answering means healthy — one dead intranet host
+# must not read as a dead tunnel.
+run_health() {
+  HEALTH_MSG=""
+  local pid dev t
+  pid="$(vpn_pid || true)"
+  [ -n "$pid" ] || { HEALTH_MSG="not connected"; return 2; }
+  dev="$(vpn_dev)"
+  [ -n "$dev" ] || { HEALTH_MSG="openconnect runs (pid $pid) but no tun device exists"; return 1; }
+  collect_probes
+  if [ ${#PROBES[@]} -eq 0 ]; then
+    HEALTH_MSG="no probe target — the VPN pushed no in-tunnel DNS and $PROBE_FILE is absent"
+    return 3
+  fi
+  for t in "${PROBES[@]}"; do
+    if probe_one "$t"; then
+      HEALTH_MSG="$t answers through $dev (targets: $PROBE_SOURCE)"
+      return 0
+    fi
+  done
+  HEALTH_MSG="tunnel is up but nothing flows — no answer from: ${PROBES[*]} ($PROBE_SOURCE)"
+  return 1
+}
+
+record_strike() {  # <why> — 3 in a row parks the --auto watchdog until a human acts
+  local n
+  n="$(tr -dc '0-9' < "$STATE_DIR/vpn.strikes" 2>/dev/null || true)"
+  n=$(( ${n:-0} + 1 ))
+  mark vpn.strikes "$n"
+  echo "cisco-vpn heal: reconnect did not restore traffic (${1:-?}) — strike $n/3" >&2
+  if [ "${AUTO:-0}" = 1 ] && [ "$n" -ge 3 ]; then
+    mark vpn.blocked "3 failed heals in a row ($(date '+%F %T')) — session expired server-side?"
+    echo "cisco-vpn heal: parking the watchdog — 'cisco-vpn heal' or a new sso login resets it" >&2
+  fi
+}
+
+# One reconnect: suspend semantics (SIGHUP keeps the cookie), resume from the saved
+# session, then probe until traffic actually flows again. Exits — never returns.
+attempt_reconnect() {
+  local pid ok=1 i vrc
+  pid="$(vpn_pid || true)"
+  if have systemctl && [ -e "$UNIT_FILE" ]; then
+    # Go through cisco-vpn.service: its KillSignal=SIGHUP makes `restart` exactly
+    # suspend+resume, and the new openconnect lands in THAT unit's cgroup. Resuming
+    # directly from the oneshot timer service would leave openconnect in the
+    # timer's cgroup, which systemd tears down with SIGTERM when the run ends —
+    # and SIGTERM is a logout, burning the very cookie this is built around.
+    if [ -n "$pid" ] && ! systemctl is-active --quiet cisco-vpn.service; then
+      # An openconnect the unit does not know about (foreground start, manual
+      # resume): take it down ourselves or ExecStart sees "already connected".
+      $SUDO kill -HUP "$pid" 2>/dev/null || true
+      await_exit "$pid" SIGHUP || true
+      $SUDO rm -f "$PID_FILE"
+    fi
+    $SUDO systemctl restart cisco-vpn.service || ok=0
+  elif [ "${AUTO:-0}" = 1 ]; then
+    echo "cisco-vpn heal: no $UNIT_FILE — refusing a timer-run reconnect (see above:" >&2
+    echo "                the cgroup teardown would log the session off). Run:" >&2
+    echo "                cisco-vpn install-service" >&2
+    record_strike "no systemd unit to reconnect through"
+    exit 1
+  else
+    if [ -n "$pid" ]; then
+      $SUDO kill -HUP "$pid" 2>/dev/null || true
+      await_exit "$pid" SIGHUP || exit 1
+      $SUDO rm -f "$PID_FILE"
+    fi
+    "$0" resume --background || ok=0
+  fi
+  if [ "$ok" = 1 ]; then
+    # Routes and DNS land a beat after the fork; give it three sweeps.
+    for i in 1 2 3; do
+      sleep 5
+      vrc=0; run_health || vrc=$?
+      case "$vrc" in
+        0|3)
+          unmark vpn.strikes; unmark vpn.blocked
+          echo "==> cisco-vpn: healed — $HEALTH_MSG"
+          exit 0 ;;
+      esac
+    done
+  fi
+  record_strike "$HEALTH_MSG"
+  exit 1
 }
 
 # Consumed here rather than passed through, in every mode — hence the pre-parse.
@@ -331,6 +533,9 @@ case "${1:-}" in
         . "$SESSION_FILE"
         echo "    a saved session for ${GATEWAY:-${HOST:-?}} is present — cisco-vpn resume"
       fi
+      if marked vpn.blocked; then
+        echo "    watchdog parked: $(cat "$STATE_DIR/vpn.blocked" 2>/dev/null) — cisco-vpn heal retries"
+      fi
       exit 1
     fi
     dev="$(vpn_dev)"
@@ -350,6 +555,14 @@ case "${1:-}" in
     printf '    %-10s %s\n' dns "$(awk '/^nameserver/{print $2}' /etc/resolv.conf 2>/dev/null | paste -sd' ' -)"
     printf '    %-10s %s\n' session \
       "$([ -r "$SESSION_FILE" ] && echo 'saved (survives suspend/reboot)' || echo 'none saved')"
+    if marked vpn.blocked; then
+      printf '    %-10s %s\n' watchdog \
+        "PARKED: $(cat "$STATE_DIR/vpn.blocked" 2>/dev/null) — cisco-vpn heal retries"
+    elif have systemctl && systemctl is-active --quiet cisco-vpn-watch.timer 2>/dev/null; then
+      printf '    %-10s %s\n' watchdog 'on — probes through the tunnel every minute'
+    else
+      printf '    %-10s %s\n' watchdog 'off — cisco-vpn install-service adds the auto-heal timer'
+    fi
     [ "$VPN_PID_SOURCE" = scan ] && \
       printf '    %-10s %s\n' note 'found by process scan — started in the foreground, or by something else'
     # openconnect answers SIGUSR1 by writing its own stats into the log it was
@@ -367,6 +580,69 @@ case "${1:-}" in
     exit 0
     ;;
 
+  health)
+    quiet=0; case "${2:-}" in -q|--quiet) quiet=1 ;; esac
+    hrc=0; run_health || hrc=$?
+    case "$hrc" in
+      0)
+        # A probe that answers is ground truth — clear a parked watchdog with it.
+        unmark vpn.blocked; unmark vpn.strikes
+        [ "$quiet" = 1 ] || echo "==> cisco-vpn: healthy — $HEALTH_MSG" ;;
+      3)
+        hrc=0   # connected and unprobeable is not a failure, just say how to get probes
+        if [ "$quiet" != 1 ]; then
+          echo "==> cisco-vpn: connected, but $HEALTH_MSG"
+          echo "    echo 'intranet.example.com:443' > $PROBE_FILE   # host[:port], URL or dns:<ip>, one per line"
+        fi ;;
+      1) [ "$quiet" = 1 ] || echo "cisco-vpn: UNHEALTHY — $HEALTH_MSG" ;;
+      2) [ "$quiet" = 1 ] || echo "cisco-vpn: not connected" ;;
+    esac
+    exit "$hrc"
+    ;;
+
+  heal)
+    AUTO=0; case "${2:-}" in --auto) AUTO=1 ;; esac
+    if [ "$AUTO" = 1 ] && marked vpn.blocked; then
+      # Parked after 3 straight failures — almost always an expired session, which
+      # no retry loop can fix, and every retry pokes the gateway. Stay quiet;
+      # `status` explains, and any human action below resets it.
+      exit 0
+    fi
+    if [ "$AUTO" = 0 ]; then
+      # A human asking IS the reset switch — including for systemd's own start
+      # limit, which a string of failed resumes will have tripped.
+      unmark vpn.blocked; unmark vpn.strikes
+      if have systemctl && [ -e "$UNIT_FILE" ]; then
+        $SUDO systemctl reset-failed cisco-vpn.service 2>/dev/null || true
+      fi
+    fi
+    hrc=0; run_health || hrc=$?
+    if [ "$hrc" = 1 ] && [ "$AUTO" = 1 ]; then
+      # One blip (a probe target rebooting, one lost packet) must not bounce the
+      # tunnel: only two failing sweeps 8s apart count as wedged.
+      sleep 8
+      hrc=0; run_health || hrc=$?
+    fi
+    case "$hrc" in
+      0|3)
+        unmark vpn.strikes
+        [ "$AUTO" = 1 ] || echo "==> cisco-vpn: nothing to heal — $HEALTH_MSG"
+        exit 0 ;;
+      2)
+        if [ "$AUTO" = 0 ]; then
+          echo "cisco-vpn: not connected — use 'cisco-vpn resume' (or sso <gateway>)" >&2
+          exit 1
+        fi
+        marked vpn.suspended && exit 0     # a deliberate suspend is not a fault
+        [ -r "$SESSION_FILE" ] || exit 0   # nothing to resume with
+        echo "cisco-vpn heal: not connected but a session is saved — reconnecting"
+        attempt_reconnect ;;
+      1)
+        echo "==> cisco-vpn heal: $HEALTH_MSG"
+        attempt_reconnect ;;
+    esac
+    ;;
+
   stop)
     pid="$(vpn_pid || true)"
     [ -n "$pid" ] || { echo "cisco-vpn: not connected"; exit 0; }
@@ -376,6 +652,7 @@ case "${1:-}" in
     await_exit "$pid" SIGINT || exit 1
     $SUDO rm -f "$PID_FILE"
     rm -f "$SESSION_FILE"
+    unmark vpn.blocked; unmark vpn.strikes; unmark vpn.suspended
     echo "==> cisco-vpn: disconnected and logged out (saved session discarded)"
     exit 0
     ;;
@@ -388,6 +665,8 @@ case "${1:-}" in
     $SUDO kill -HUP "$pid" 2>/dev/null || true
     await_exit "$pid" SIGHUP || exit 1
     $SUDO rm -f "$PID_FILE"
+    # Deliberate — the watchdog must not "fix" this by resuming it a minute later.
+    mark vpn.suspended "$(date '+%F %T')"
     echo "==> cisco-vpn: suspended, session kept — reconnect with: cisco-vpn resume"
     exit 0
     ;;
@@ -400,6 +679,11 @@ case "${1:-}" in
     . "$SESSION_FILE"
     [ -n "$COOKIE" ] || { echo "cisco-vpn: saved session has no cookie" >&2; exit 1; }
     have openconnect || install_openconnect
+    # The suspend was deliberate; resuming ends that. vpn.blocked/strikes stay —
+    # only a VERIFIED probe (health, or heal's post-reconnect check) clears them,
+    # otherwise the watchdog's own restart→resume would reset its strike counter
+    # every failed attempt and it could never park itself.
+    unmark vpn.suspended
     echo "==> cisco-vpn: resuming ${GATEWAY:-$HOST} from the saved session"
     # A cookie the head-end has already expired or logged out fails here; that is not
     # recoverable without a fresh browser login, so say so plainly.
@@ -417,13 +701,19 @@ case "${1:-}" in
     # shutdown and logs the session off, and the cookie is dead before you come back.
     # KillSignal=SIGHUP is the whole point of the unit.
     have systemctl || { echo "cisco-vpn: no systemd on this box" >&2; exit 1; }
-    unit=/etc/systemd/system/cisco-vpn.service
+    wunit=/etc/systemd/system/cisco-vpn-watch.service
+    wtimer=/etc/systemd/system/cisco-vpn-watch.timer
     self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-    $SUDO tee "$unit" >/dev/null <<EOF
+    $SUDO tee "$UNIT_FILE" >/dev/null <<EOF
 [Unit]
 Description=cisco-vpn — resume the saved openconnect session
 After=network-online.target
 Wants=network-online.target
+# An expired cookie can never resume, and Restart= would otherwise redo that
+# failing login every 30s forever. Five tries in ten minutes, then stay failed —
+# a manual 'cisco-vpn heal' runs reset-failed for you.
+StartLimitIntervalSec=10min
+StartLimitBurst=5
 
 [Service]
 # forking + PIDFile so systemd tracks openconnect itself (started with -b), not the
@@ -433,7 +723,8 @@ PIDFile=$PID_FILE
 Environment=HOME=$HOME
 ExecStart=$self resume --background
 # SIGTERM would log the session off and leave nothing to resume. SIGHUP disconnects
-# and keeps it.
+# and keeps it. It also makes 'systemctl restart' literally suspend+resume, which
+# is exactly how 'cisco-vpn heal' reconnects a wedged tunnel.
 KillSignal=SIGHUP
 Restart=on-failure
 RestartSec=30
@@ -441,18 +732,48 @@ RestartSec=30
 [Install]
 WantedBy=multi-user.target
 EOF
+    # The watchdog: a oneshot probe, minutely. It never runs openconnect itself —
+    # a heal goes through 'systemctl restart cisco-vpn' (see attempt_reconnect for
+    # why that cgroup detail is load-bearing) — so oneshot teardown is safe here.
+    $SUDO tee "$wunit" >/dev/null <<EOF
+[Unit]
+Description=cisco-vpn — probe through the tunnel, suspend+resume it if wedged
+
+[Service]
+Type=oneshot
+Environment=HOME=$HOME
+ExecStart=$self heal --auto
+EOF
+    $SUDO tee "$wtimer" >/dev/null <<EOF
+[Unit]
+Description=cisco-vpn — minutely tunnel health check
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target
+EOF
     $SUDO systemctl daemon-reload
     $SUDO systemctl enable cisco-vpn.service >/dev/null 2>&1
+    $SUDO systemctl enable --now cisco-vpn-watch.timer >/dev/null 2>&1
     cat <<EOF
-==> cisco-vpn: installed $unit and enabled it at boot.
+==> cisco-vpn: installed $UNIT_FILE (resume at boot)
+    and cisco-vpn-watch.timer (minutely: probe through the tunnel, heal if wedged).
 
     Log in once (cisco-vpn sso <gateway> -b) so a session exists; from then on a
-    reboot suspends rather than logs out, and the tunnel comes back on its own.
-    Sessions still expire server-side — when they do the unit fails and you redo SSO.
+    reboot suspends rather than logs out, the tunnel comes back on its own, and the
+    "up but nothing loads" state a host sleep leaves behind is suspend+resumed for
+    you. Sessions still expire server-side — the watchdog then parks itself after
+    3 failed heals and 'cisco-vpn status' tells you to redo the SSO login.
 
-      systemctl status cisco-vpn      what systemd thinks
-      cisco-vpn status                what the tunnel is actually doing
-      sudo systemctl disable --now cisco-vpn    undo
+      systemctl status cisco-vpn               what systemd thinks
+      systemctl list-timers 'cisco-vpn-*'      when the next probe fires
+      cisco-vpn status                         what the tunnel is actually doing
+      cisco-vpn health                         one probe, right now
+      sudo systemctl disable --now cisco-vpn cisco-vpn-watch.timer    undo
 EOF
     exit 0
     ;;
@@ -611,6 +932,6 @@ chmod 755 "$helper"
 #                               network drops reconnect on their own.
 setup_routes
 echo "==> cisco-vpn: connecting to $server (Ctrl-C disconnects)"
-$SUDO openconnect --protocol=anyconnect --external-browser="$helper" \
+$SUDO openconnect --protocol=anyconnect --external-browser="$helper" --force-dpd 30 \
   ${ROUTE_ARGS+"${ROUTE_ARGS[@]}"} "$@" "$server"
 {{ end -}}

@@ -165,8 +165,10 @@ if have apt-get; then
 {{ end }}
 {{ if $vpn }}
   # vpn — see ~/.local/bin/cisco-vpn. openconnect >= 9.00 (Ubuntu 24.04+ / Debian 12+)
-  # is what supports SSO; vpnc-scripts owns the route/DNS setup.
-  apt_install openconnect vpnc-scripts pipx \
+  # is what supports SSO; vpnc-scripts owns the route/DNS setup. bind9-dnsutils is
+  # dig, which the health watchdog prefers for its probe through the tunnel (it
+  # falls back to a TCP connect without it, but UDP DNS is the truer signal).
+  apt_install openconnect vpnc-scripts pipx bind9-dnsutils \
     || echo "WARN: vpn apt packages failed to install"
   have openconnect-saml || pipx install openconnect-saml >/dev/null 2>&1 \
     || echo "WARN: openconnect-saml install failed (needed for embedded-SAML head-ends)"

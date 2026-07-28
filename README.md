@@ -137,6 +137,7 @@ vm proxy hsg          # SOCKS5 on 127.0.0.1:1080, in the background
 vm proxy lab 9090     # a second one, different port
 vm proxy status       # which are up, on which ports
 vm proxy stop [name]  # stop one, or all of them
+vm proxy ensure hsg   # (re)start only if it's gone — safe to run any time
 vm proxy hsg --foreground
 ```
 
@@ -148,6 +149,16 @@ Backgrounding uses ssh's own **ControlMaster** rather than a pid file: `-M` leav
 control socket in `~/.local/state/dotenv/`, and `-O check` / `-O exit` then query and
 stop that exact connection. Nothing to go stale, and no chance of signalling an
 unrelated ssh. `status` cleans up sockets whose ssh has died (the file outlives it).
+
+**When intranet pages stop loading**, one of two links is down, and each now looks
+after itself. A Mac sleep tends to leave the ssh master *wedged* — socket present,
+nothing flowing — so the proxy runs with `ServerAliveInterval=15` /
+`CountMax=4`: a wedged master turns into a dead one within a minute, and
+`vm proxy ensure hsg` (idempotent, reuses the previous port) puts it back. If the
+proxy is up but VPN targets are still unreachable, the tunnel *inside* the VM is
+what's wedged — the VM-side watchdog heals that on its own within a couple of
+minutes (see [running it as a service](#running-it-as-a-service)), or immediately
+with `vm shell hsg cisco-vpn heal`.
 
 ## Logins that survive a rebuild
 
@@ -521,10 +532,12 @@ through the VM — see [`vm proxy`](#browse-through-a-vms-vpn).
 ```sh
 cisco-vpn sso vpn.unisg.ch/priv -b   # connect, then detach
 cisco-vpn status [-v]                # interface, routes, DNS, traffic counters
+cisco-vpn health                     # is traffic actually FLOWING? (probe via tunnel)
+cisco-vpn heal                       # …and suspend+resume it if not
 cisco-vpn suspend                    # drop the tunnel, KEEP the session
 cisco-vpn resume                     # reconnect, no browser
 cisco-vpn stop                       # disconnect AND log out
-cisco-vpn install-service            # resume automatically on boot (systemd)
+cisco-vpn install-service            # on boot: resume; every minute: heal if wedged
 ```
 
 All of this rides on how openconnect handles signals: **SIGINT/SIGTERM log the session
@@ -541,6 +554,29 @@ systemd stops services with SIGTERM, which openconnect treats as a clean logout 
 without a unit that sets `KillSignal=SIGHUP`, rebooting kills the very session you were
 trying to keep. Sessions still expire server-side; when that happens `resume` fails and
 says so, and you redo the SSO login.
+
+**The wedge, and the watchdog.** A host sleep often leaves the tunnel *looking* up —
+openconnect alive, `tun0` present, routes installed — while nothing flows, which from
+the outside is indistinguishable from healthy. `health` therefore probes *through*
+the tunnel: targets come from `~/.config/dotenv/vpn-probe` (or `$CISCO_VPN_PROBE`) —
+`host[:port]`, a URL, or `dns:<ip>`, one per line, any one answering = healthy — and
+default to the **DNS servers the VPN itself pushed** (filtered to ones actually
+routed via the tunnel, so `--routes` restrictions and `--no-vpn-dns` don't produce
+false alarms; with `--no-vpn-dns` and no probe file there is nothing to probe with,
+and `health` says so instead of guessing). `heal` is that probe plus the fix you'd
+type by hand — suspend && resume — and `install-service` now also installs
+**`cisco-vpn-watch.timer`**, which runs `heal --auto` every minute: two failing
+sweeps 8s apart count as wedged (one blip doesn't bounce the tunnel), the reconnect
+goes through `systemctl restart cisco-vpn` (whose `KillSignal=SIGHUP` makes a
+restart literally suspend+resume, and keeps openconnect out of the timer's own
+soon-to-be-torn-down cgroup), and the result is verified by probing again. After
+**3 failed heals in a row** the watchdog parks itself — the session has almost
+always expired server-side, which only a human with a browser can fix — and
+`cisco-vpn status` shows why; a manual `heal`, a `resume`, or a fresh `sso` login
+resets it. A deliberate `cisco-vpn suspend` is remembered and never "fixed".
+Connections also pass `--force-dpd 30` now, so openconnect's own dead-peer
+detection catches most wedges within 30s and reconnects on the same cookie; the
+watchdog is the backstop for the states DPD sleeps through.
 
 `status` reads the tunnel device from `/sys/class/net/<dev>/statistics` and finds the
 process by pid file, falling back to a process scan so a foreground session is still
@@ -665,7 +701,8 @@ the default, so a plain apply installs the shell and nothing else:
   `dev` adds lazydocker + dive the same way (no OrbStack — macOS only — so pair it
   with `docker` for an engine); `k8s` adds k9s the same way, plus kubectl from
   dl.k8s.io (macOS gets kubectl from OrbStack, so this is Linux-only); `vpn` adds
-  openconnect + vpnc-scripts + openconnect-saml. **`yq`, `gh`, `mise`,
+  openconnect + vpnc-scripts + openconnect-saml, and bind9-dnsutils for the
+  watchdog's DNS probe. **`yq`, `gh`, `mise`,
   `git-absorb` and the container tools remain macOS-only** — install them from
   Homebrew-on-Linux or upstream releases if you want them in a VM. LazyVim needs
   Neovim ≥ 0.9 (0.10+ recommended) and a C compiler for treesitter; on older

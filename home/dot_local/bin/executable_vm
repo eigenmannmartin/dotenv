@@ -11,6 +11,7 @@
 #   vm new box  --profile ai              + claude code & codex CLIs
 #   vm proxy hsg [port]                   SOCKS5 on :1080 — browse via that VM's VPN
 #     …runs in the background: vm proxy status | vm proxy stop [name] | --foreground
+#   vm proxy ensure hsg                   start it only if it is not already alive
 #   vm resize work --cpus 8 --memory 16   change a VM after the fact (disk can only grow)
 #   vm ssh work -t claude                 -t gives a pty, which full-screen TUIs need
 #   vm ls | vm shell <name> [cmd…] | vm ssh <name> | vm stop <name> | vm rm <name>
@@ -76,7 +77,7 @@ seed_git_identity() {
   echo "    git identity: ${name:-?} <${email:-?}> (from this machine)"
 }
 
-usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 # Accumulator so repeated flags compose instead of overwriting each other.
 FEATURES=""
@@ -332,10 +333,18 @@ case "$cmd" in
       done
     }
 
+    # A Mac sleep tends to leave the master connection wedged rather than dead:
+    # the socket looks fine, nothing flows. ServerAlive turns wedged into DEAD
+    # within a minute, which status/ensure can see and replace. ExitOnForwardFailure
+    # makes a failed -D bind (port taken) fail the command instead of leaving a
+    # proxyless master behind — without it ssh only warns and carries on.
+    SSH_KEEPALIVE=(-o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ExitOnForwardFailure=yes)
+
+    ensure=0
     psub="${1:-}"
     case "$psub" in
       ""|-h|--help)
-        die "usage: vm proxy <name> [port] [--foreground] | vm proxy status | vm proxy stop [name]" ;;
+        die "usage: vm proxy <name> [port] [--foreground] | vm proxy ensure <name> [port] | vm proxy status | vm proxy stop [name]" ;;
 
       status)
         found=0
@@ -370,10 +379,17 @@ EOF
           rm -f "$(proxy_ctl "$n")" "$(proxy_port_file "$n")"
         done
         exit 0 ;;
+
+      ensure)
+        # Idempotent start, for "pages stopped loading" muscle memory and for
+        # anything periodic — alive is a silent success, dead is replaced.
+        shift
+        psub="${1:-}"; [ -n "$psub" ] || die "usage: vm proxy ensure <name> [port]"
+        ensure=1 ;;
     esac
 
     name="$psub"; shift
-    port=1080; foreground=0
+    port=""; foreground=0
     while [ $# -gt 0 ]; do
       case "$1" in
         --foreground) foreground=1; shift ;;
@@ -381,11 +397,19 @@ EOF
         *)            die "unknown option '$1' (vm proxy <name> [port] [--foreground])" ;;
       esac
     done
+    [ "$ensure" = 1 ] && [ "$foreground" = 1 ] && die "ensure runs in the background"
+    if [ -z "$port" ]; then
+      # ensure reuses the port the proxy last ran on, so it comes back exactly
+      # where the browser already expects it.
+      [ "$ensure" = 1 ] && port="$(cat "$(proxy_port_file "$psub")" 2>/dev/null || true)"
+      [ -n "$port" ] || port=1080
+    fi
     cfg="$(proxy_cfg "$name")"
     [ -f "$cfg" ] || die "no ssh config for '$name' — is it running?"
 
     if [ "$foreground" = 0 ]; then
       if proxy_alive "$name" >/dev/null 2>&1; then
+        [ "$ensure" = 1 ] && { echo "==> vm: proxy for '$name' already up (127.0.0.1:$(cat "$(proxy_port_file "$name")" 2>/dev/null || echo '?'))"; exit 0; }
         die "a proxy for '$name' is already running (vm proxy status)"
       fi
       # A unix socket path is capped at ~104 bytes by the kernel, and ssh fails with a
@@ -394,9 +418,10 @@ EOF
         || die "control socket path too long — set XDG_STATE_HOME to something shorter"
       mkdir -p "$STATE_DIR"
       rm -f "$(proxy_ctl "$name")"     # left behind by a previous ssh that died
-      # -f backgrounds only after authentication, so a failure to bind the port or
-      # reach the VM still surfaces here rather than vanishing into the background.
-      ssh -F "$cfg" -M -S "$(proxy_ctl "$name")" -f -N -D "127.0.0.1:$port" "lima-$name" \
+      # -f backgrounds only after authentication (and, with ExitOnForwardFailure,
+      # after the -D bind), so a failure to bind the port or reach the VM still
+      # surfaces here rather than vanishing into the background.
+      ssh -F "$cfg" "${SSH_KEEPALIVE[@]}" -M -S "$(proxy_ctl "$name")" -f -N -D "127.0.0.1:$port" "lima-$name" \
         || die "could not start the proxy (port $port already in use?)"
       proxy_alive "$name" >/dev/null 2>&1 || die "proxy did not come up — try --foreground to see why"
       printf '%s\n' "$port" > "$(proxy_port_file "$name")"
@@ -405,6 +430,8 @@ EOF
       echo "==> vm: SOCKS5 proxy for '$name' on 127.0.0.1:$port (Ctrl-C to stop)"
     fi
 
+    # A restart already has a browser pointed at it — skip the how-to.
+    [ "$ensure" = 1 ] && exit 0
     cat <<EOF
 
     Point something at it:
@@ -418,7 +445,7 @@ EOF
 
 EOF
     # -N: no remote command, this is a tunnel only.
-    [ "$foreground" = 1 ] && exec ssh -F "$cfg" -N -D "127.0.0.1:$port" "lima-$name"
+    [ "$foreground" = 1 ] && exec ssh -F "$cfg" "${SSH_KEEPALIVE[@]}" -N -D "127.0.0.1:$port" "lima-$name"
     exit 0
     ;;
 
