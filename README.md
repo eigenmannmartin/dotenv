@@ -588,6 +588,14 @@ login resets it. Connections also pass `--force-dpd 30` now, so openconnect's ow
 dead-peer detection catches most wedges within 30s and reconnects on the same
 cookie; the watchdog is the backstop for the states DPD sleeps through.
 
+One failure mode needs more than a probe: the tunnel still *flows* but the DNS
+config itself is gone (systemd-resolved restarted and forgot the per-link entries,
+or something rewrote `resolv.conf`). Probes would happily pass while every corporate
+lookup fails — so `health` also checks that the resolvers the VPN pushed (recorded
+by the connect shim in `~/.local/state/dotenv/vpn.dns`) are still configured, and
+treats their loss as wedged: the heal's suspend+resume re-runs the connect script,
+which re-registers them.
+
 `status` reads the tunnel device from `/sys/class/net/<dev>/statistics` and finds the
 process by pid file, falling back to a process scan so a foreground session is still
 visible (it labels which one it found). `-v` additionally sends SIGUSR1 and tails
@@ -603,17 +611,34 @@ cisco-vpn sso vpn.unisg.ch/priv --no-vpn-dns    # keep this VM's resolver too
 
 openconnect passes the head-end's config to `vpnc-script` through the environment,
 and `vpnc-script` installs one route per `CISCO_SPLIT_INC_<n>_*` triple — falling back
-to a **default route through the tunnel** when `CISCO_SPLIT_INC` is unset. So
-`--routes` generates a shim that overwrites those variables and then `exec`s the real
+to a **default route through the tunnel** when `CISCO_SPLIT_INC` is unset. So every
+connect generates a shim that rewrites those variables and then hands off to the real
 `vpnc-script`. That beats fixing up `ip route` after the fact: there's no race, and it
 re-applies on every reconnect. Setting a *lower* count also masks any extra ranges the
 server pushed, since the loop only reads indices below it — and it narrows a
-full-tunnel group just as well as a split one.
+full-tunnel group just as well as a split one. The shim lives at
+`~/.local/state/dotenv/vpn-connect-script`, not in a temp file: openconnect re-runs
+it on every DPD reconnect and on disconnect, long after the wrapper has exited.
 
-`--no-vpn-dns` additionally unsets `INTERNAL_IP4_DNS`/`CISCO_DEF_DOMAIN`, because
-`vpnc-script` otherwise replaces `resolv.conf` wholesale and sends *every* lookup in
-the VM to the corporate resolver — much wider than the routes you just restricted.
-The trade is that intranet hostnames stop resolving, so you'd address those by IP.
+**DNS is the shim's other job.** Left alone, `vpnc-script` replaces `resolv.conf`
+wholesale — and on a systemd-resolved box it does so by writing *through* the
+`/etc/resolv.conf` symlink into resolved's own generated stub file. That's two
+outages in one: resolved regenerates that file whenever it pleases (a restart from
+`unattended-upgrades` is enough) and silently drops the VPN DNS mid-session — the
+classic "the VPN loses DNS from time to time", invisible to any tunnel probe because
+the tunnel is fine — and until then *every* lookup in the VM, public included, rides
+resolvers only reachable through the tunnel, so any wedge kills all DNS. So when
+systemd-resolved is up, the shim keeps `vpnc-script` away from `resolv.conf` and
+registers the pushed resolvers **per-link** instead (`resolvectl dns/domain <tun>`):
+with `--routes`, only the VPN's search domain (plus the matching reverse zones) is
+routed to them and public lookups stay on the local resolver; without `--routes`
+they become the lookup default — still per-link, still nothing for resolved to
+clobber, and the config dies with the tun device so disconnects need no restore.
+Without resolved, the old file-rewrite behavior remains as the fallback.
+
+`--no-vpn-dns` unsets `INTERNAL_IP4_DNS`/`CISCO_DEF_DOMAIN` entirely, keeping this
+VM's resolver untouched. The trade is that intranet hostnames stop resolving, so
+you'd address those by IP.
 
 Routes are resolved from `--routes`, then `$CISCO_VPN_ROUTES`, then
 `~/.config/dotenv/vpn-routes` (`#` comments allowed), and are validated before
