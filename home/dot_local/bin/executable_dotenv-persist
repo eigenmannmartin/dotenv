@@ -50,6 +50,11 @@ die() { echo "dotenv-persist: $*" >&2; exit 1; }
 #   .claude.json               account, onboarding state, and the per-project MRU list
 #                              /resume is built from — useless without the transcripts
 #   .claude/projects/          the transcripts themselves, one .jsonl per session
+# The two runai entries are what makes the CLI installable at all on a fresh VM:
+# every Run:ai control-plane download endpoint sits behind SSO, and the install
+# script (20-install-packages, k8s feature) bootstraps the binary with the bearer
+# token from authentication.json — which the CLI refreshes whenever it is used on
+# any box sharing this store. config.json carries the control-plane URL + cluster.
 DEFAULT_PATHS='
 .local/share/atuin/key
 .local/share/atuin/session
@@ -59,6 +64,8 @@ DEFAULT_PATHS='
 .claude.json
 .claude/projects/
 .config/dotenv/op-service-account-token
+.runai/authentication.json
+.runai/config.json
 '
 
 # One cleaned entry per line — comments, whitespace and blanks already gone, so the

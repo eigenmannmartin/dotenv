@@ -79,10 +79,14 @@ fi
 # `compaudit | xargs chmod go-w` fixes them for good.
 # Startup dragging? `compinit -C` skips the security check entirely.
 autoload -Uz compinit && compinit -i
-if [[ "$OSTYPE" == darwin* ]]; then
-  export PATH=$PATH:/Users/martin/.runai/bin
-  # runai prints "Failed to check for CLI updates." onto stdout, polluting the sourced completion; strip it.
-  [ -x /Users/martin/.runai/bin/runai ] && source <(/Users/martin/.runai/bin/runai completion zsh 2>/dev/null | grep -v 'Failed to check for CLI updates')
+# runai lives in ~/.runai/bin once it has self-upgraded (`runai upgrade`), or in
+# ~/.local/bin from the install-script bootstrap. PREPENDED: ~/.local/bin is already
+# near the front of PATH, so appending would leave a stale bootstrap copy shadowing
+# every future self-upgrade.
+[ -d "$HOME/.runai/bin" ] && export PATH=$HOME/.runai/bin:$PATH
+# runai prints "Failed to check for CLI updates." onto stdout, polluting the sourced completion; strip it.
+if command -v runai >/dev/null 2>&1; then
+  source <(runai completion zsh 2>/dev/null | grep -v 'Failed to check for CLI updates')
 fi
 
 # Use 1Password agent only when its socket exists, so devcontainer/Codespaces forwarded SSH_AUTH_SOCK is left alone.

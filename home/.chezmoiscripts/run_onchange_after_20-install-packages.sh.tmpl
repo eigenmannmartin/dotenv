@@ -160,8 +160,14 @@ if have apt-get; then
   # `nodejs` alone gives you `node` and no `npm`. Everything installed through npm
   # below (devcontainer, claude, codex) then silently skipped with a warning that
   # scrolled past during provisioning.
-  apt_install neovim python3 nodejs npm jq btop direnv \
+  # gh: Ubuntu's universe build is fine for PR/issue work; the login persists across
+  # VMs via dotenv-persist (.config/gh/hosts.yml).
+  apt_install neovim python3 nodejs npm jq btop direnv gh pipx \
     || echo "WARN: some dev apt packages failed to install"
+  # pre-commit via pipx, not apt: hook repos routinely demand a minimum pre-commit
+  # version newer than the distro package.
+  have pre-commit || pipx install pre-commit >/dev/null 2>&1 \
+    || echo "WARN: pre-commit install failed (pipx)"
 {{ end }}
 {{ if $vpn }}
   # vpn — see ~/.local/bin/cisco-vpn. openconnect >= 9.00 (Ubuntu 24.04+ / Debian 12+)
@@ -260,6 +266,44 @@ gh_release_install wagoodman/dive dive 'dive_%V_linux_%G.tar.gz'
 {{ if $k8s }}
 mkdir -p "$HOME/.local/bin"
 gh_release_install derailed/k9s k9s 'k9s_Linux_%G.tar.gz'
+
+# amtui — k9s-style TUI for Alertmanager (alerts, silences). The HSG ingress
+# (alertmanager.hpcmgmt.unisg.ch) sits behind SSO, so point it at a port-forward:
+#   kubectl -n monitoring-prometheus port-forward svc/monitoring-prometheus-kube-alertmanager 9093 &
+#   amtui --host localhost --port 9093
+gh_release_install pehlicd/amtui amtui 'amtui_v%V_linux_%G.tar.gz'
+
+# runai — the Run:ai researcher CLI. Every control-plane download endpoint sits
+# behind SSO (bearer token), so a fresh box can only bootstrap from the login that
+# dotenv-persist carries over in ~/.runai/authentication.json — the CLI refreshes
+# that token whenever it is used on any box sharing the store. The dist path is
+# unversioned on purpose: the control plane serves the build matching itself, and
+# the CLI keeps itself current afterwards (`runai upgrade` installs into
+# ~/.runai/bin, which zshrc then prefers over this bootstrap copy).
+if ! have runai && [ ! -x "$HOME/.runai/bin/runai" ]; then
+  _rauth="$HOME/.runai/authentication.json"
+  if [ -r "$_rauth" ]; then
+    echo "==> installing runai CLI"
+    _rtok="$(sed -n 's/.*"accessToken":[[:space:]]*"\([^"]*\)".*/\1/p' "$_rauth" | base64 -d 2>/dev/null)"
+    case "$(uname -m)" in
+      x86_64|amd64)  _rarch=amd64 ;;
+      aarch64|arm64) _rarch=arm64 ;;
+      *)             _rarch="$(uname -m)" ;;
+    esac
+    _rtmp="$(mktemp)"
+    if [ -n "$_rtok" ] && curl -fLso "$_rtmp" -m 60 -H "Authorization: Bearer $_rtok" \
+        "https://runai.hpc.unisg.ch/api/v1/cli-exposer/dist/linux/${_rarch}/runai"; then
+      install -m755 "$_rtmp" "$HOME/.local/bin/runai"
+    else
+      echo "WARN: runai download failed — VPN down, or the persisted token is stale" \
+           "(it lives ~a day; running runai on any other box refreshes it). Re-run after fixing either."
+    fi
+    rm -f "$_rtmp"
+  else
+    echo "WARN: runai skipped — no persisted ~/.runai/authentication.json (log in once on a box with dotenv-persist active)"
+  fi
+  unset _rauth _rtok _rarch _rtmp
+fi
 
 # kubectl publishes a bare binary on dl.k8s.io rather than a GitHub release tarball,
 # so gh_release_install cannot fetch it — hence the hand-rolled copy of its arch case.

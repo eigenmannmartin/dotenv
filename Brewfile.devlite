@@ -12,6 +12,7 @@ brew "jq"           # query/transform JSON (kubectl -o json, docker inspect, API
 brew "yq"           # query/transform YAML (k8s manifests, helm values)
 brew "gh"           # GitHub CLI — PRs/issues/reviews (+ gh-dash extension)
 brew "git-absorb"   # auto-route fixup commits into the right history
+brew "pre-commit"   # run repo-configured git hooks (.pre-commit-config.yaml)
 brew "mise"         # per-project tool versions (Go/Python/Node/Dart) + tasks
 brew "direnv"       # per-directory env; loads op:// secrets on cd (use_op helper)
 brew "lazygit"      # TUI for git — stage hunks, rebase, stash (prefix+g / cmd+g)
