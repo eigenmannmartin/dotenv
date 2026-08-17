@@ -1,0 +1,39 @@
+#!/bin/sh
+# hpc-alerts — Alertmanager TUI (amtui) against the HSG monitoring stack.
+#
+# The ingress (alertmanager.hpcmgmt.unisg.ch) sits behind SSO, which a TUI cannot
+# drive, so this port-forwards the in-cluster service and points amtui at it. The
+# forward is torn down again on exit — unless one was already listening on the
+# port (yours or another tool's), which is then left alone and simply reused.
+#
+#   hpc-alerts                 # forward + amtui, clean up on quit
+#   HPC_ALERTS_PORT=19093 …    # local port, if 9093 is taken by something else
+set -u
+
+NS=monitoring-prometheus
+SVC=monitoring-prometheus-kube-alertmanager
+PORT="${HPC_ALERTS_PORT:-9093}"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+alive() { curl -sf -m 1 "http://localhost:$PORT/api/v2/status" >/dev/null 2>&1; }
+
+have amtui   || { echo "hpc-alerts: amtui not installed — chezmoi apply (k8s feature)" >&2; exit 1; }
+have kubectl || { echo "hpc-alerts: kubectl not installed — chezmoi apply (k8s feature)" >&2; exit 1; }
+
+if ! alive; then
+  kubectl -n "$NS" port-forward "svc/$SVC" "$PORT:9093" >/dev/null 2>&1 &
+  pf=$!
+  trap 'kill "$pf" 2>/dev/null' EXIT INT TERM
+  # Give the forward a few seconds; if the kubectl process dies instead, say why
+  # it usually does rather than letting amtui show an empty screen.
+  i=0
+  until alive; do
+    kill -0 "$pf" 2>/dev/null \
+      || { echo "hpc-alerts: port-forward died — VPN up? kubeconfig pointing at the HSG cluster?" >&2; exit 1; }
+    i=$((i + 1))
+    [ "$i" -ge 40 ] && { echo "hpc-alerts: Alertmanager not answering through the forward after 10s" >&2; exit 1; }
+    sleep 0.25
+  done
+fi
+
+amtui --host localhost --port "$PORT"
