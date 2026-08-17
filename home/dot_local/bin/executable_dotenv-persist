@@ -66,6 +66,7 @@ DEFAULT_PATHS='
 .config/dotenv/op-service-account-token
 .runai/authentication.json
 .runai/config.json
+.config/argocd/config
 '
 
 # One cleaned entry per line — comments, whitespace and blanks already gone, so the

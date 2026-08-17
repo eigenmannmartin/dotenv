@@ -8,3 +8,4 @@ brew "kubecolor"    # colorized kubectl (aliased to k / kubectl in ~/.zshrc)
 brew "kubectx"      # switch kube contexts + namespaces (installs kubens)
 brew "stern"        # tail logs across many Kubernetes pods at once
 brew "helm"         # Kubernetes package manager (charts)
+brew "argocd"       # Argo CD CLI (cluster runs it in the argocd namespace)

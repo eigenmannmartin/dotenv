@@ -267,6 +267,27 @@ gh_release_install wagoodman/dive dive 'dive_%V_linux_%G.tar.gz'
 mkdir -p "$HOME/.local/bin"
 gh_release_install derailed/k9s k9s 'k9s_Linux_%G.tar.gz'
 
+# argocd — publishes bare binaries rather than release tarballs, so
+# gh_release_install cannot unpack it; `latest/download` also spares the version
+# lookup. Login persists across VMs via dotenv-persist (.config/argocd/config).
+if ! have argocd; then
+  echo "==> installing argocd"
+  case "$(uname -m)" in
+    x86_64|amd64)  _aarch=amd64 ;;
+    aarch64|arm64) _aarch=arm64 ;;
+    *)             _aarch="$(uname -m)" ;;
+  esac
+  _atmp="$(mktemp)"
+  if curl -fLso "$_atmp" \
+      "https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-${_aarch}"; then
+    install -m755 "$_atmp" "$HOME/.local/bin/argocd"
+  else
+    echo "WARN: argocd download failed"
+  fi
+  rm -f "$_atmp"
+  unset _aarch _atmp
+fi
+
 # amtui — k9s-style TUI for Alertmanager (alerts, silences). The HSG ingress
 # (alertmanager.hpcmgmt.unisg.ch) sits behind SSO, so point it at a port-forward:
 #   kubectl -n monitoring-prometheus port-forward svc/monitoring-prometheus-kube-alertmanager 9093 &
