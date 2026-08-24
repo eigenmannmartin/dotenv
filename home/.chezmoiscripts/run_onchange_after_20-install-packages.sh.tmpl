@@ -399,6 +399,28 @@ clone_plugin https://github.com/zsh-users/zsh-autosuggestions zsh-autosuggestion
 clone_plugin https://github.com/zdharma-continuum/fast-syntax-highlighting zsh-fast-syntax-highlighting
 {{ end -}}
 
+# bat >= 0.26 bundles the Catppuccin themes (Homebrew ships that); apt's 0.25 does not,
+# and then BOTH ~/.zshrc's BAT_THEME and delta's syntax-theme below print
+# "Unknown theme 'Catppuccin Macchiato', using default" on every cat and git diff.
+# delta has no theme store of its own — it reads bat's compiled cache — so one
+# download + `bat cache --build` fixes both. Gated on the theme list, not on the
+# file, so a bat that already bundles it never gets a redundant user copy.
+_bat=""; have bat && _bat=bat; [ -z "$_bat" ] && have batcat && _bat=batcat
+if [ -n "$_bat" ] && ! "$_bat" --list-themes 2>/dev/null | grep -qx "Catppuccin Macchiato"; then
+  echo "==> installing bat theme Catppuccin Macchiato"
+  _btd="$("$_bat" --config-dir 2>/dev/null)"
+  if [ -z "$_btd" ]; then
+    echo "WARN: bat --config-dir failed; theme not installed"
+  elif mkdir -p "$_btd/themes" && curl -fLso "$_btd/themes/Catppuccin Macchiato.tmTheme" \
+      "https://github.com/catppuccin/bat/raw/main/themes/Catppuccin%20Macchiato.tmTheme"; then
+    "$_bat" cache --build >/dev/null 2>&1 || echo "WARN: bat cache --build failed"
+  else
+    echo "WARN: bat theme download failed"
+  fi
+  unset _btd
+fi
+unset _bat
+
 if have delta && have git; then
   git config --global core.pager "delta"
   git config --global interactive.diffFilter "delta --color-only"
