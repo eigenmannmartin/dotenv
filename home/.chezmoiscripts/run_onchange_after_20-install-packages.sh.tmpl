@@ -162,7 +162,7 @@ if have apt-get; then
   # scrolled past during provisioning.
   # gh: Ubuntu's universe build is fine for PR/issue work; the login persists across
   # VMs via dotenv-persist (.config/gh/hosts.yml).
-  apt_install neovim python3 nodejs npm jq btop direnv gh pipx \
+  apt_install neovim python3 nodejs npm jq btop direnv gh pipx git-lfs \
     || echo "WARN: some dev apt packages failed to install"
   # pre-commit via pipx, not apt: hook repos routinely demand a minimum pre-commit
   # version newer than the distro package.
@@ -430,6 +430,15 @@ if have delta && have git; then
   git config --global delta.syntax-theme "Catppuccin Macchiato"
   git config --global merge.conflictStyle zdiff3
 fi
+
+{{ if $devlite }}
+# git-lfs is inert until `git lfs install` registers its clean/smudge filters in
+# ~/.gitconfig: without that, a clone of an LFS repo checks out the pointer stubs and
+# nothing says so. Global once per box; idempotent, so cheap to repeat on every apply.
+if have git-lfs; then
+  git lfs install --skip-repo >/dev/null 2>&1 || echo "WARN: git lfs install failed"
+fi
+{{ end }}
 
 {{ if $k8s }}
 # k9s config.yaml is k9s-managed (rewritten on exit), so patch only our preference keys in place once it exists; yq preferred, python fallback.
