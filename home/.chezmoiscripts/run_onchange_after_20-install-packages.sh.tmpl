@@ -66,21 +66,33 @@ is_headless() {
 # Projects disagree on the arch token — lazygit ships x86_64, k9s ships amd64 — and
 # getting it wrong is invisible on arm64 (both use "arm64") while 404ing on every
 # Intel box, so each caller states which spelling it needs.
+#
+# The version is looked up through api.github.com ONLY when the asset name needs it
+# (%V). That endpoint is rate-limited to 60 requests/hour per IP unauthenticated, and
+# a few applies in a row (or a shared egress) exhaust it — after which every tool
+# here silently reported "could not resolve version". Unversioned asset names go via
+# releases/latest/download/ instead, which is a plain redirect with no such limit.
 gh_release_install() {
-  local repo="$1" bin="$2" tmpl="$3" ver arch goarch tmp asset
+  local repo="$1" bin="$2" tmpl="$3" ver arch goarch tmp asset url
   have "$bin" && return 0
   echo "==> installing $bin"
-  ver="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" \
-    | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
-  [ -n "$ver" ] || { echo "WARN: could not resolve $bin version"; return 0; }
   case "$(uname -m)" in
     x86_64|amd64)  arch=x86_64; goarch=amd64 ;;
     aarch64|arm64) arch=arm64;  goarch=arm64 ;;
     *)             arch="$(uname -m)"; goarch="$arch" ;;
   esac
-  asset="${tmpl//%V/$ver}"; asset="${asset//%A/$arch}"; asset="${asset//%G/$goarch}"
+  asset="${tmpl//%A/$arch}"; asset="${asset//%G/$goarch}"
+  if [ "${asset#*%V}" != "$asset" ]; then
+    ver="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" \
+      | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
+    [ -n "$ver" ] || { echo "WARN: could not resolve $bin version (api.github.com rate limit?)"; return 0; }
+    asset="${asset//%V/$ver}"
+    url="https://github.com/$repo/releases/download/v${ver}/${asset}"
+  else
+    url="https://github.com/$repo/releases/latest/download/${asset}"
+  fi
   tmp="$(mktemp -d)"
-  if curl -fLso "$tmp/a.tgz" "https://github.com/$repo/releases/download/v${ver}/${asset}"; then
+  if curl -fLso "$tmp/a.tgz" "$url"; then
     tar -xzf "$tmp/a.tgz" -C "$tmp" "$bin" 2>/dev/null \
       && install -m755 "$tmp/$bin" "$HOME/.local/bin/$bin" \
       || echo "WARN: $bin not found in archive"
