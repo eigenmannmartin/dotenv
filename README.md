@@ -47,7 +47,7 @@ DOTENV_FEATURES=core,dev,k8s,vpn ./install.sh # everything
 | `core` | zsh + plugins, tmux + tpm, terminfo, oh-my-posh, atuin, fzf/ripgrep/bat/eza/zoxide/delta/fd |
 | `devlite` | neovim + LazyVim config, lazygit, node, jq, direnv, btop, devcontainer CLI + `dx`, git-lfs, pnpm, prettier (macOS also yq, gh + gh-dash, mise, git-absorb, dust/duf/procs) |
 | `dev` | **`devlite` + the container layer**: OrbStack (macOS only) and lazydocker/dive (+ ctop on macOS) |
-| `k8s` | k9s + its config; kubectl on Linux (macOS also kubectx/stern/helm/kubecolor) |
+| `k8s` | k9s + its config, helm, helmfmt; kubectl on Linux (macOS also kubectx/stern/kubecolor) |
 | `vpn` | openconnect + openconnect-saml → the [`cisco-vpn`](#cisco-vpn-entra-id-sso-from-the-lima-vm) command |
 | `ai` | Claude Code + Codex CLIs (`claude`, `codex`) + [Backlog.md](#backlogmd-boards) (`backlog`), via npm — implies `devlite` for node |
 | `docker` | docker engine + compose, so [devcontainers](#dev-containers) run in the VM itself |
@@ -295,6 +295,7 @@ dive only, and the engine comes from the `docker` feature:
 | `kubens` | switch the active Kubernetes namespace |
 | `stern` | tail & color-code logs from multiple pods at once |
 | `helm` | install, upgrade & inspect apps packaged as Helm charts |
+| `helmfmt` | format the Go-template side of a chart (`{{ if }}`/`range` indentation) without touching its YAML |
 
 **More dev tooling** — the **`devlite`** feature ([`Brewfile.devlite`](Brewfile.devlite),
 also pulled in by `dev`); on Linux only neovim/node/jq/direnv/btop/lazygit arrive, the
@@ -735,7 +736,9 @@ the default, so a plain apply installs the shell and nothing else:
   neovim/python3/nodejs/jq/btop/direnv/gh/git-lfs from apt, pnpm/prettier/devcontainer from npm, and lazygit from its GitHub release;
   `dev` adds lazydocker + dive the same way (no OrbStack — macOS only — so pair it
   with `docker` for an engine); `k8s` adds k9s the same way, plus kubectl from
-  dl.k8s.io (macOS gets kubectl from OrbStack, so this is Linux-only); `vpn` adds
+  dl.k8s.io (macOS gets kubectl from OrbStack, so this is Linux-only), helm from
+  get.helm.sh and helmfmt from its GitHub release (that one on macOS too — it has no
+  Homebrew formula); `vpn` adds
   openconnect + vpnc-scripts + openconnect-saml, and bind9-dnsutils for the
   watchdog's DNS probe. **`yq`, `gh`, `mise`,
   `git-absorb` and the container tools remain macOS-only** — install them from

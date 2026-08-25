@@ -356,6 +356,35 @@ if ! have kubectl; then
   fi
   unset _kver _karch _ktmp
 fi
+
+# helm — the same story as kubectl: its GitHub releases carry no assets (the tarballs
+# live on get.helm.sh), and the binary sits under a linux-<arch>/ directory inside
+# the archive, which gh_release_install's top-level extract would miss. macOS gets
+# it from Brewfile.k8s.
+if ! have helm; then
+  echo "==> installing helm"
+  case "$(uname -m)" in
+    x86_64|amd64)  _harch=amd64 ;;
+    aarch64|arm64) _harch=arm64 ;;
+    *)             _harch="$(uname -m)" ;;
+  esac
+  _hver="$(curl -fsSL https://get.helm.sh/helm-latest-version)"
+  if [ -z "$_hver" ]; then
+    echo "WARN: could not resolve helm version"
+  else
+    _htmp="$(mktemp -d)"
+    if curl -fLso "$_htmp/helm.tgz" \
+        "https://get.helm.sh/helm-${_hver}-linux-${_harch}.tar.gz"; then
+      tar -xzf "$_htmp/helm.tgz" -C "$_htmp" "linux-${_harch}/helm" 2>/dev/null \
+        && install -m755 "$_htmp/linux-${_harch}/helm" "$HOME/.local/bin/helm" \
+        || echo "WARN: helm not found in archive"
+    else
+      echo "WARN: helm download failed"
+    fi
+    rm -rf "$_htmp"
+  fi
+  unset _hver _harch _htmp
+fi
 {{ end }}
 
 # Desktop-only: kitty + FiraCode Nerd Font. Skipped anywhere without a display —
@@ -441,6 +470,13 @@ fi
 {{ end }}
 
 {{ if $k8s }}
+# helmfmt — formatter for the Go-template side of Helm charts (aligns {{ "{{ if }}" }} /
+# range / end indentation, leaves the YAML alone). No Homebrew formula, but its
+# releases ship a root-level binary for both OSes, so this runs on macOS too — the
+# only tool here that does. Wire it up per project via .helmfmt / pre-commit.
+mkdir -p "$HOME/.local/bin"
+gh_release_install digitalstudium/helmfmt helmfmt 'helmfmt_{{ title .chezmoi.os }}_%A.tar.gz'
+
 # k9s config.yaml is k9s-managed (rewritten on exit), so patch only our preference keys in place once it exists; yq preferred, python fallback.
 # enableMouse=false on purpose: with it on, k9s grabs the mouse and its reactive refresh wipes any selection — you can't copy.
 # Off, a drag falls through to tmux copy-mode (a frozen snapshot tmux-yank copies cleanly); read/copy structured output via the Shift-D/Y/X/E pager plugins.
@@ -493,6 +529,13 @@ fi
 # docker to talk to (OrbStack via "dev", or apt docker.io via "docker"), but installing
 # it on a devlite box costs nothing and keeps `dx` working against a remote engine.
 npm_global_install @devcontainers/cli devcontainer
+# pnpm — the package manager most JS projects here pin (`packageManager` field); it
+# takes over from itself once installed, so this bootstrap copy only has to exist.
+# prettier — a global copy so LazyVim's formatter (conform → prettier) works in a
+# checkout that doesn't ship it as a devDependency, and `prettier` is on PATH for
+# one-off formatting outside any project.
+npm_global_install pnpm pnpm
+npm_global_install prettier prettier
 {{ end }}
 
 {{ if $ai }}
@@ -529,12 +572,5 @@ if [ "${DOTENV_NO_CHSH:-0}" != "1" ] && have zsh; then
   unset _SUDO _zsh _cur
 fi
 {{ end -}}
-# pnpm — the package manager most JS projects here pin (`packageManager` field); it
-# takes over from itself once installed, so this bootstrap copy only has to exist.
-# prettier — a global copy so LazyVim's formatter (conform → prettier) works in a
-# checkout that doesn't ship it as a devDependency, and `prettier` is on PATH for
-# one-off formatting outside any project.
-npm_global_install pnpm pnpm
-npm_global_install prettier prettier
 
 echo "==> dotenv: package step done"
