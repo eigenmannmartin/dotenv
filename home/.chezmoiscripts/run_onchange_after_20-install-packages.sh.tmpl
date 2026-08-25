@@ -529,5 +529,12 @@ if [ "${DOTENV_NO_CHSH:-0}" != "1" ] && have zsh; then
   unset _SUDO _zsh _cur
 fi
 {{ end -}}
+# pnpm — the package manager most JS projects here pin (`packageManager` field); it
+# takes over from itself once installed, so this bootstrap copy only has to exist.
+# prettier — a global copy so LazyVim's formatter (conform → prettier) works in a
+# checkout that doesn't ship it as a devDependency, and `prettier` is on PATH for
+# one-off formatting outside any project.
+npm_global_install pnpm pnpm
+npm_global_install prettier prettier
 
 echo "==> dotenv: package step done"

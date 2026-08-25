@@ -45,7 +45,7 @@ DOTENV_FEATURES=core,dev,k8s,vpn ./install.sh # everything
 | Feature | Adds |
 |---|---|
 | `core` | zsh + plugins, tmux + tpm, terminfo, oh-my-posh, atuin, fzf/ripgrep/bat/eza/zoxide/delta/fd |
-| `devlite` | neovim + LazyVim config, lazygit, node, jq, direnv, btop, devcontainer CLI + `dx`, git-lfs (macOS also yq, gh + gh-dash, mise, git-absorb, dust/duf/procs) |
+| `devlite` | neovim + LazyVim config, lazygit, node, jq, direnv, btop, devcontainer CLI + `dx`, git-lfs, pnpm, prettier (macOS also yq, gh + gh-dash, mise, git-absorb, dust/duf/procs) |
 | `dev` | **`devlite` + the container layer**: OrbStack (macOS only) and lazydocker/dive (+ ctop on macOS) |
 | `k8s` | k9s + its config; kubectl on Linux (macOS also kubectx/stern/helm/kubecolor) |
 | `vpn` | openconnect + openconnect-saml → the [`cisco-vpn`](#cisco-vpn-entra-id-sso-from-the-lima-vm) command |
@@ -732,7 +732,7 @@ the default, so a plain apply installs the shell and nothing else:
   it in `~/.atuin/bin`, which only `~/.zshrc` ever puts on PATH; it is run with
   `--non-interactive`, without which it probes for a tty via `exec 3</dev/tty` and
   dies silently under dash during `vm new`, where there isn't one. `devlite` adds
-  neovim/python3/nodejs/jq/btop/direnv/gh/git-lfs from apt and lazygit from its GitHub release;
+  neovim/python3/nodejs/jq/btop/direnv/gh/git-lfs from apt, pnpm/prettier/devcontainer from npm, and lazygit from its GitHub release;
   `dev` adds lazydocker + dive the same way (no OrbStack — macOS only — so pair it
   with `docker` for an engine); `k8s` adds k9s the same way, plus kubectl from
   dl.k8s.io (macOS gets kubectl from OrbStack, so this is Linux-only); `vpn` adds
