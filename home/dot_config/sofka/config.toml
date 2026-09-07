@@ -1,0 +1,5 @@
+# ~/.config/sofka/config.toml — chezmoi-tracked as home/dot_config/sofka/config.toml
+# Same palette as the k9s skin. background stays at its default (false) so views
+# inherit the terminal's own near-black instead of painting Macchiato's base.
+[skin]
+name = "catppuccin-macchiato"

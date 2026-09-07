@@ -228,7 +228,7 @@ login, without saying so.
 | `~/.config/oh-my-posh/config.omp.json` | Catppuccin prompt: per-project **color bar**, **git status**, **transient** + **right-prompt**, **kube-context guard** |
 | `~/.config/nvim` | **LazyVim** + Catppuccin Macchiato + **lang extras** (Go/Py/Docker/k8s/Helm/Dart + DAP); `lazy-lock` pinned |
 | `~/.config/atuin/config.toml` | atuin shell history — **synced to the home-network server** (set `sync_address`) |
-| `~/.config/{k9s,lazygit,gh-dash,direnv}` | k9s (blue skin + full logs), lazygit & gh-dash themes, direnv `use_op` secrets helper |
+| `~/.config/{k9s,sofka,lazygit,gh-dash,direnv}` | k9s (blue skin + full logs), sofka (Macchiato skin), lazygit & gh-dash themes, direnv `use_op` secrets helper |
 | `~/.config/git/ignore` | global gitignore (git reads it with no config) — currently `.backlog/` |
 | `~/.config/dotenv/secrets.env` | `op://` references for [`secrets`](#secrets-into-env-vars-and-logins) — **created once, never overwritten** |
 | `~/.local/bin/{secrets,dotenv-persist}` | 1Password → env/logins, and logins shared across VM rebuilds |
