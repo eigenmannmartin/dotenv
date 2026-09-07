@@ -4,6 +4,8 @@
 # talks to clusters. Linux has no OrbStack, so the install script fetches kubectl from
 # dl.k8s.io there instead.
 brew "k9s"          # TUI dashboard for Kubernetes clusters
+tap "nklmilojevic/sofka"
+brew "nklmilojevic/sofka/sofka"   # k9s reimagined in Rust: any CRD, Flux/Argo actions, incident view
 brew "kubecolor"    # colorized kubectl (aliased to k / kubectl in ~/.zshrc)
 brew "kubectx"      # switch kube contexts + namespaces (installs kubens)
 brew "stern"        # tail logs across many Kubernetes pods at once

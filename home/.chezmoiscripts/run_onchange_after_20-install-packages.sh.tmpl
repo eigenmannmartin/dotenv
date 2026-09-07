@@ -62,10 +62,12 @@ is_headless() {
 
 # Fetch a binary out of a GitHub release tarball into ~/.local/bin.
 # <owner/repo> <binary> <asset-template>
-#   %V = version, %A = uname-style arch (x86_64|arm64), %G = Go-style arch (amd64|arm64)
-# Projects disagree on the arch token — lazygit ships x86_64, k9s ships amd64 — and
-# getting it wrong is invisible on arm64 (both use "arm64") while 404ing on every
-# Intel box, so each caller states which spelling it needs.
+#   %V = version, %A = uname-style arch (x86_64|arm64), %G = Go-style arch (amd64|arm64),
+#   %R = Rust-triple arch (x86_64|aarch64)
+# Projects disagree on the arch token — lazygit ships x86_64, k9s ships amd64, sofka
+# ships aarch64 — and getting it wrong is invisible on one arch (uname and Go agree on
+# "arm64", uname and Rust on "x86_64") while 404ing on the other, so each caller states
+# which spelling it needs.
 #
 # The version is looked up through api.github.com ONLY when the asset name needs it
 # (%V). That endpoint is rate-limited to 60 requests/hour per IP unauthenticated, and
@@ -73,15 +75,15 @@ is_headless() {
 # here silently reported "could not resolve version". Unversioned asset names go via
 # releases/latest/download/ instead, which is a plain redirect with no such limit.
 gh_release_install() {
-  local repo="$1" bin="$2" tmpl="$3" ver arch goarch tmp asset url
+  local repo="$1" bin="$2" tmpl="$3" ver arch goarch rustarch tmp asset url
   have "$bin" && return 0
   echo "==> installing $bin"
   case "$(uname -m)" in
-    x86_64|amd64)  arch=x86_64; goarch=amd64 ;;
-    aarch64|arm64) arch=arm64;  goarch=arm64 ;;
-    *)             arch="$(uname -m)"; goarch="$arch" ;;
+    x86_64|amd64)  arch=x86_64; goarch=amd64; rustarch=x86_64 ;;
+    aarch64|arm64) arch=arm64;  goarch=arm64; rustarch=aarch64 ;;
+    *)             arch="$(uname -m)"; goarch="$arch"; rustarch="$arch" ;;
   esac
-  asset="${tmpl//%A/$arch}"; asset="${asset//%G/$goarch}"
+  asset="${tmpl//%A/$arch}"; asset="${asset//%G/$goarch}"; asset="${asset//%R/$rustarch}"
   if [ "${asset#*%V}" != "$asset" ]; then
     ver="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" \
       | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
@@ -278,6 +280,9 @@ gh_release_install wagoodman/dive dive 'dive_%V_linux_%G.tar.gz'
 {{ if $k8s }}
 mkdir -p "$HOME/.local/bin"
 gh_release_install derailed/k9s k9s 'k9s_Linux_%G.tar.gz'
+# sofka — k9s reimagined in Rust: generic CRD pipeline, Flux/Argo actions built in,
+# `X` incident view. Kept alongside k9s rather than replacing it.
+gh_release_install nklmilojevic/sofka sofka 'sofka-v%V-%R-unknown-linux-gnu.tar.gz'
 
 # argocd — publishes bare binaries rather than release tarballs, so
 # gh_release_install cannot unpack it; `latest/download` also spares the version
