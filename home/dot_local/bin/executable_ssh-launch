@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# ssh-launch — fzf picker for SSH + port-forward targets, so you stop scrolling history.
+# Sources:
+#   1) curated targets in ~/.config/ssh-launch/targets   (one per line:  label = command)
+#   2) named Host entries from ~/.ssh/config             (skips wildcards, bare IPs, localhost)
+# Pick one → runs it in a new tmux window named by the label (inline when not in tmux).
+# Type a host that isn't listed and hit Enter to ssh to it ad-hoc.   `ssh-launch --list` dumps entries.
+set -uo pipefail
+
+TARGETS="${SSH_LAUNCH_TARGETS:-$HOME/.config/ssh-launch/targets}"
+
+# First run: drop a commented template (NO real hosts — yours stay local, never in the dotfiles repo).
+if [ ! -f "$TARGETS" ]; then
+  mkdir -p "$(dirname "$TARGETS")"
+  cat > "$TARGETS" <<'EOF'
+# ssh-launch targets — one per line:   label = command
+# '#' lines and blanks are ignored. This file is LOCAL (not in the dotfiles repo). Examples:
+# app 8080      = ssh -L 8080:localhost:8080 ubuntu@example.com
+# db tunnel     = ssh -N -L 5432:127.0.0.1:5432 dbhost
+# socks proxy   = ssh -D 1080 -N jump-host
+EOF
+fi
+
+trim() { sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'; }
+
+list() {
+  # curated targets: "label<TAB>command"
+  { grep -vE '^[[:space:]]*(#|$)' "$TARGETS" | grep -F '=' || true; } | while IFS= read -r line; do
+    label="$(printf '%s' "${line%%=*}" | trim)"
+    cmd="$(printf '%s' "${line#*=}" | trim)"
+    [ -n "$label" ] && [ -n "$cmd" ] && printf '%s\t%s\n' "$label" "$cmd"
+  done
+  # named hosts from ssh config → "host<TAB>ssh host"
+  if [ -f "$HOME/.ssh/config" ]; then
+    { awk 'tolower($1)=="host"{for(i=2;i<=NF;i++) print $i}' "$HOME/.ssh/config" \
+        | grep -vE '[*?!]|^localhost$|^([0-9]{1,3}\.){3}[0-9]{1,3}$' | sort -u || true; } \
+      | while IFS= read -r h; do printf '%s\t%s\n' "$h" "ssh $h"; done
+  fi
+}
+
+[ "${1:-}" = "--list" ] && { list; exit 0; }
+
+sel="$(list | fzf --delimiter='\t' --with-nth=1 --print-query \
+        --prompt='ssh ❯ ' --reverse --height='100%' \
+        --header='Enter: connect  ·  type an unlisted host to ssh ad-hoc' \
+        --preview 'echo {2}' --preview-window='down,3,wrap' || true)"
+
+[ -z "$sel" ] && exit 0
+query="$(printf '%s\n' "$sel" | sed -n '1p')"
+choice="$(printf '%s\n' "$sel" | sed -n '2p')"
+
+if [ -n "$choice" ]; then
+  label="$(printf '%s' "$choice" | cut -f1)"
+  cmd="$(printf '%s' "$choice" | cut -f2-)"
+elif [ -n "$query" ]; then
+  label="$query"; cmd="ssh $query"          # ad-hoc: ssh to whatever you typed
+else
+  exit 0
+fi
+
+if [ -n "${TMUX:-}" ]; then
+  tmux new-window -n "${label:0:24}" "$cmd"
+else
+  exec "${SHELL:-/bin/sh}" -c "$cmd"
+fi

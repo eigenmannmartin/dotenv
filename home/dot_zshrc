@@ -263,9 +263,10 @@ if command -v kitten >/dev/null 2>&1 && [[ -n "$KITTY_WINDOW_ID" && -z "$TMUX" ]
   alias ssh='kitten ssh'
 fi
 
-# Auto-start tmux for interactive top-level shells; non-exec so a broken ~/.tmux.conf doesn't kill the login shell. Disable with TMUX_AUTOSTART=0.
+# Opt-in tmux auto-start (off by default: start tmux manually). Enable with TMUX_AUTOSTART=1 for interactive
+# top-level shells; non-exec so a broken ~/.tmux.conf doesn't kill the login shell.
 if [[ -z "$TMUX" && -o interactive && -t 1 \
-      && "${TMUX_AUTOSTART:-1}" != "0" \
+      && "${TMUX_AUTOSTART:-0}" == "1" \
       && "$TERM_PROGRAM" != "vscode" \
       && -z "$VSCODE_INJECTION$REMOTE_CONTAINERS$CODESPACES$CI$TERMINAL_EMULATOR" \
       && ! -e /.dockerenv && ! -e /run/.containerenv ]] \
