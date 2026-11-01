@@ -14,7 +14,7 @@
 
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
 
-if [ "$(uname -s)" = "Linux" ]; then
+if [[ "$OSTYPE" == linux* ]]; then
   case ":$PATH:" in *":/usr/sbin:"*) ;; *) export PATH="$PATH:/usr/sbin:/sbin" ;; esac
 fi
 

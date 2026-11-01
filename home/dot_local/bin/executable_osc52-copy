@@ -9,6 +9,7 @@
 # Deliberately does NOT shell out to xclip/xsel: on a headless box (a Lima VM,
 # a container) DISPLAY is empty and xclip fails or blocks, which is worse than
 # it not being installed at all.
+# shellcheck disable=SC1003  # the trailing \\ in each printf format is the ST terminator (ESC \), not a quote escape
 set -u
 
 sel=c
