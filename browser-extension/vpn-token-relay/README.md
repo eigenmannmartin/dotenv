@@ -12,7 +12,7 @@ It just ends on a "you may now close this tab" page with the session token sitti
 a cookie named `acSamlv2Token`. Something has to carry that cookie the last inch.
 This extension is that something.
 
-The cookie is not `HttpOnly`, which is also why the bookmarklet in `cisco-vpn --help`
+The cookie is not `HttpOnly`, which is also why the bookmarklet that `cisco-vpn sso` prints
 works — this is the same trick with the click removed.
 
 ## Install (Chrome / Edge / Brave, on the Mac)
@@ -34,7 +34,7 @@ cisco-vpn sso vpn.unisg.ch/priv     # prints the login URL, copies it to your Ma
 ```
 
 Open the URL on the Mac, sign in. The moment Entra hands you back to the gateway, the
-extension sees the cookie appear, POSTs it to the VM, and the tunnel comes up. A green
+extension sees the cookie appear, sends it to the VM, and the tunnel comes up. A green
 `ok` badge means it landed; a red `!` means nothing was listening (check that
 `cisco-vpn sso` is still waiting, and that the port matches).
 

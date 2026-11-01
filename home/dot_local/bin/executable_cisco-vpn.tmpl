@@ -78,7 +78,7 @@ Mac exactly like the native flow. One-time: pipx install openconnect-saml.
 
 For a hands-free `sso`, load the browser extension in browser-extension/vpn-token-relay
 (repo root, "Load unpacked" in chrome://extensions on the Mac). It spots the token
-cookie and posts it to the callback below by itself — no bookmarklet, no pasting.
+cookie and hands it to openconnect-saml's waiting callback by itself — no bookmarklet, no pasting.
 
 `cookie` is the manual variant — authenticate anywhere (incl. on the Mac with
 `openconnect-saml --authenticate`), then pipe the cookie in:
@@ -139,7 +139,7 @@ find_vpnc_script() {
 # ages /tmp at 10 days, under the 14-day life of a session. Each connect
 # overwrites it.
 build_route_script() {
-  local real f cidr addr len mask rev_zones="" o1 o2 o3 o4 _rest dns_extra dns_defroute i=0
+  local real f cidr addr len mask rev_zones="" o1 o2 o3 _rest dns_extra dns_defroute i=0
   real="$(find_vpnc_script)" || {
     echo "cisco-vpn: no vpnc-script found — install vpnc-scripts (cisco-vpn install)" >&2
     return 1
@@ -526,6 +526,7 @@ gateway_reachable() {
   local h p=443
   [ -r "$SESSION_FILE" ] || return 0
   # Subshell so sourcing does not clobber HOST/GATEWAY in the caller.
+  # shellcheck disable=SC1090
   h="$( . "$SESSION_FILE" 2>/dev/null || true; printf '%s' "${HOST:-${GATEWAY:-}}" )"
   h="${h#https://}"; h="${h%%/*}"
   case "$h" in
@@ -703,6 +704,7 @@ case "${1:-}" in
     up="$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')"
     printf '==> cisco-vpn: connected (pid %s%s)\n' "$pid" \
       "${up:+, up $(printf '%dh%02dm%02ds' $((up/3600)) $((up%3600/60)) $((up%60)))}"
+    # shellcheck disable=SC1090
     [ -r "$SESSION_FILE" ] && { . "$SESSION_FILE"; printf '    %-10s %s\n' gateway "${GATEWAY:-${HOST:-?}}"; }
     if [ -n "$dev" ]; then
       printf '    %-10s %s  %s  mtu %s\n' interface "$dev" \

@@ -1,5 +1,5 @@
 # dotenv macOS dependencies — CORE (the shell itself). Installed on every machine.
-# Feature add-ons live in Brewfile.devlite / Brewfile.dev / Brewfile.k8s (additive,
+# Feature add-ons live in Brewfile.devlite / Brewfile.dev / Brewfile.k8s / Brewfile.flutter (additive,
 # in that order — "dev" means devlite + the container layer) and are pulled in by
 # home/.chezmoiscripts/run_onchange_after_20-install-packages.sh.tmpl according to
 # DOTENV_FEATURES. Install manually with: brew bundle --file Brewfile

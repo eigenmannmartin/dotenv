@@ -104,9 +104,9 @@ gh_release_install() {
   rm -rf "$tmp"
 }
 
-# Global npm CLIs (devcontainer, claude, codex). Defined unconditionally because more
+# Global npm CLIs (devcontainer, pnpm, prettier, claude, codex, backlog). Defined unconditionally because more
 # than one feature needs it.
-npm_global_install() {   # <package> [min-node-major]
+npm_global_install() {   # <package> <binary> [min-node-major]
   have "$2" && return 0
   # Loud, and says what to do: this silently swallowed every npm install on a fresh
   # Ubuntu VM, because `nodejs` there ships without npm.
@@ -133,7 +133,7 @@ if have brew; then
   # --no-upgrade: install only what's missing; don't churn already-installed tools.
   # Brewfile.<feature> files are additive; a missing one is simply skipped.
   for _bf in Brewfile {{ if $devlite }}Brewfile.devlite{{ end }} {{ if $dev }}Brewfile.dev{{ end }} {{ if $k8s }}Brewfile.k8s{{ end }} {{ if $flutter }}Brewfile.flutter{{ end }}; do
-    _p="{{ .chezmoi.workingTree }}/$_bf"
+    _p="{{ .chezmoi.sourceDir | dir }}/$_bf"
     [ -f "$_p" ] || continue
     brew bundle --no-upgrade --file "$_p" || echo "WARN: brew bundle ($_bf) had failures"
   done

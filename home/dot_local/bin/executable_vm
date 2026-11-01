@@ -9,16 +9,18 @@
 #   vm new big  --profile full --cpus 8 --memory 16 --disk 120
 #   vm new work --mount ~/code --mount ~/notes:ro     share just these dirs
 #   vm new box  --profile ai              + claude code & codex CLIs
+#   vm new box  --no-mounts --no-persist  skip ~/.config/dotenv/vm-mounts / the login store
+#   vm new dev  --repo URL --ref BRANCH   bootstrap from a fork or branch instead of main
 #   vm proxy hsg [port]                   SOCKS5 on :1080 — browse via that VM's VPN
 #     …runs in the background: vm proxy status | vm proxy stop [name] | --foreground
 #   vm proxy ensure hsg                   start it only if it is not already alive
 #   vm resize work --cpus 8 --memory 16   change a VM after the fact (disk can only grow)
 #   vm ssh work -t claude                 -t gives a pty, which full-screen TUIs need
-#   vm ls | vm shell <name> [cmd…] | vm ssh <name> | vm stop <name> | vm rm <name>
+#   vm ls | vm shell <name> [cmd…] | vm ssh <name> | vm start <name> | vm stop <name> | vm rm <name>
 #
 # Profiles map to DOTENV_FEATURES, which is what actually decides the package set:
 #   min core | devlite core,devlite | dev +dev | k8s +k8s | vpn +vpn | ai +ai
-#   docker +docker | full all
+#   docker +dev,docker | full all
 # (everything except min implies devlite — the editor/toolchain half; `dev` adds the
 #  container clients on top, and OrbStack is macOS-only so a VM wants `docker` for the
 #  engine itself)
@@ -54,7 +56,7 @@ die()  { echo "vm: $*" >&2; exit 1; }
 # exist in a Linux guest. dotenv-persist links this one into every VM and the
 # installer includes it from ~/.gitconfig; edit it once to change every box.
 seed_git_identity() {
-  local dir="$1" ident="$1/.config/git/identity" name email
+  local ident="$1/.config/git/identity" name email
   [ -e "$ident" ] && return 0
   have git || return 0
   # --includes, because given an explicit file (--global) git reads that file ALONE
@@ -77,7 +79,7 @@ seed_git_identity() {
   echo "    git identity: ${name:-?} <${email:-?}> (from this machine)"
 }
 
-usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 # Accumulator so repeated flags compose instead of overwriting each other.
 FEATURES=""
@@ -122,6 +124,7 @@ canonical_features() {
 # Lima wants an absolute host path; a bare `code` or `./code` would be silently
 # mounted as something else entirely (or rejected) depending on its cwd.
 abspath() {
+  # shellcheck disable=SC2088  # matching a literal ~ the user typed, not expanding one
   case "$1" in
     "~")   printf '%s' "$HOME" ;;
     "~/"*) printf '%s' "$HOME/${1#\~/}" ;;

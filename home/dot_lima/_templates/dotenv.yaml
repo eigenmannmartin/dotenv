@@ -4,7 +4,7 @@
 # (and shadows bundled templates of the same name). Driven by ~/.local/bin/vm:
 #
 #   vm new scratch                 # core only — shell, nothing else
-#   vm new work --profile dev      # + neovim/lazygit/node
+#   vm new work --profile devlite  # + neovim/lazygit/node
 #   vm new hsg  --profile vpn      # + openconnect/cisco-vpn
 #
 # Every knob is a param, because `limactl --param K=V` is REJECTED unless the
