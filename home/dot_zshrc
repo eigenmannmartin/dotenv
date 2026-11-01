@@ -134,10 +134,12 @@ fi
 if command -v bat >/dev/null; then
   export BAT_THEME="Catppuccin Macchiato"
   alias cat='bat --style=plain --paging=never'
+  export MANPAGER="sh -c 'col -bx | bat -l man -p'" MANROFFOPT='-c'
 elif command -v batcat >/dev/null; then
   export BAT_THEME="Catppuccin Macchiato"
   alias bat='batcat'
   alias cat='batcat --style=plain --paging=never'
+  export MANPAGER="sh -c 'col -bx | batcat -l man -p'" MANROFFOPT='-c'
 fi
 
 # ctop's termbox panics on TERM like xterm-kitty/tmux-256color; force a recognized TERM.
@@ -250,8 +252,6 @@ gwt-rm() {  # gwt-rm <branch>: remove the worktree created by gwt
   main=$(git worktree list --porcelain 2>/dev/null | awk 'NR==1{print $2}')
   [[ -n "$main" ]] && git worktree remove "${main}.${br//\//-}"
 }
-
-command -v bat >/dev/null && export MANPAGER="sh -c 'col -bx | bat -l man -p'" MANROFFOPT='-c'
 
 alias g='git' gs='git status -sb' gd='git diff' gl='git log --oneline -20' gco='git checkout' gp='git push' gpl='git pull'
 alias ..='cd ..' ...='cd ../..' ....='cd ../../..'

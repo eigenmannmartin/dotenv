@@ -3,12 +3,12 @@ hotKeys:
   jump-pods:
     shortCut: Shift-0
     description: Pods (all namespaces)
-    command: pods -A
+    command: pods all
     keepHistory: true
   jump-deployments:
     shortCut: Shift-1
     description: Deployments (all namespaces)
-    command: deploy -A
+    command: deploy all
     keepHistory: true
   jump-services:
     shortCut: Shift-2
@@ -38,7 +38,7 @@ hotKeys:
   jump-events:
     shortCut: Shift-7
     description: Events (all namespaces)
-    command: events -A
+    command: events all
     keepHistory: true
   jump-jobs:
     shortCut: Shift-8

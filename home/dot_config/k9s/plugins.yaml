@@ -2,6 +2,7 @@
 # $CONTEXT threaded into every command (clusters: bechterew/hpc/private).
 # containers scope: $NAME=container, $POD=pod, $COL-IMAGE=image; other scopes: $NAME=resource, $RESOURCE_NAME=lowercase plural kind.
 # Inputs: $INPUT_<UPPERCASE_NAME>; if a default is set, required must be true.
+# INPUT_* are substituted as text, not exported, so shell forms like ${INPUT_X:-…} never see them.
 # Avoid k9s built-ins: Shift-N/A/S/O are table sort keys; Shift-F/J and Shift-C/L (log view) reserved.
 plugins:
 
@@ -61,7 +62,7 @@ plugins:
     confirm: false
     args:
       - -c
-      - 'kubectl describe $RESOURCE_NAME $NAME -n $NAMESPACE --context $CONTEXT | less -R'
+      - 'kubectl describe $RESOURCE_NAME $NAME -n "$NAMESPACE" --context $CONTEXT | less -R'
 
   yaml-pager:
     shortCut: Shift-Y
@@ -73,7 +74,7 @@ plugins:
     confirm: false
     args:
       - -c
-      - 'kubectl get $RESOURCE_NAME $NAME -n $NAMESPACE --context $CONTEXT -o yaml | yq "del(.metadata.managedFields)" | bat -l yaml --paging=always --style=plain'
+      - 'kubectl get $RESOURCE_NAME $NAME -n "$NAMESPACE" --context $CONTEXT -o yaml | "$(command -v bat || command -v batcat)" -l yaml --paging=always --style=plain'
 
   events-object:
     shortCut: Shift-E
@@ -85,7 +86,7 @@ plugins:
     confirm: false
     args:
       - -c
-      - 'kubectl get events --context $CONTEXT -n $NAMESPACE --field-selector involvedObject.name=$NAME --sort-by=.lastTimestamp | less -R'
+      - 'kubectl get events --context $CONTEXT -n "$NAMESPACE" --field-selector involvedObject.name=$NAME --sort-by=.lastTimestamp | less -R'
 
   decode-secret:
     shortCut: Shift-X
@@ -220,7 +221,7 @@ plugins:
         required: false
     args:
       - -c
-      - 'kubectl rollout undo $RESOURCE_NAME/$NAME -n $NAMESPACE --context $CONTEXT ${INPUT_REV:+--to-revision=$INPUT_REV} && echo DONE; read -n1'
+      - 'rev="$INPUT_REV"; kubectl rollout undo $RESOURCE_NAME/$NAME -n $NAMESPACE --context $CONTEXT ${rev:+--to-revision=$rev} && echo DONE; read -n1'
 
   rollout-history:
     shortCut: Shift-H
@@ -307,7 +308,7 @@ plugins:
         default: "30"
     args:
       - -c
-      - 'kubectl drain $NAME --context $CONTEXT --ignore-daemonsets --delete-emptydir-data --grace-period=${INPUT_GRACE:-30} --timeout=5m; echo DONE; read -n1'
+      - 'kubectl drain $NAME --context $CONTEXT --ignore-daemonsets --delete-emptydir-data --grace-period=$INPUT_GRACE --timeout=5m; echo DONE; read -n1'
 
   helm-values:
     shortCut: Shift-V
@@ -319,7 +320,7 @@ plugins:
     confirm: false
     args:
       - -c
-      - 'helm get values $COL-NAME -n $NAMESPACE --kube-context $CONTEXT | bat -l yaml --paging=always --style=plain'
+      - 'helm get values $COL-NAME -n $NAMESPACE --kube-context $CONTEXT | "$(command -v bat || command -v batcat)" -l yaml --paging=always --style=plain'
 
   helm-history:
     shortCut: Shift-H
