@@ -5,7 +5,7 @@
 # The split exists because the container layer is the expensive half: OrbStack alone is
 # a ~1 GB cask with a VM behind it, and a box you only edit code on never needs it.
 #   DOTENV_FEATURES=core,devlite     neovim + toolchain, no container runtime
-#   DOTENV_FEATURES=core,dev         the above + OrbStack/lazydocker/ctop/dive
+#   DOTENV_FEATURES=core,dev         the above + OrbStack/lazydocker/dive
 brew "neovim"       # editor — LazyVim config shipped to ~/.config/nvim
 brew "node"         # runtime for some LSPs (yaml/k8s schema validation in nvim)
 brew "jq"           # query/transform JSON (kubectl -o json, docker inspect, APIs)
@@ -17,6 +17,7 @@ brew "pre-commit"   # run repo-configured git hooks (.pre-commit-config.yaml)
 brew "mise"         # per-project tool versions (Go/Python/Node/Dart) + tasks
 brew "direnv"       # per-directory env; loads op:// secrets on cd (use_op helper)
 brew "lazygit"      # TUI for git — stage hunks, rebase, stash (prefix+g / cmd+g)
+brew "worktrunk"    # `wt`: git worktrees as sibling repo.branch dirs — wt switch -c / list / merge
 brew "dust"         # tree-style disk usage (du)
 brew "duf"          # friendly disk/mount table (df)
 brew "procs"        # modern process viewer (ps)

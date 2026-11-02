@@ -1,0 +1,6 @@
+{{- /* pbcopy — the familiar macOS name, wired to osc52-copy. LINUX ONLY.
+     A symlink, so flags pass straight through. On darwin this renders empty, and
+     for an empty symlink target chezmoi removes whatever is at ~/.local/bin/pbcopy,
+     so it never shadows the real /usr/bin/pbcopy (~/.local/bin comes first on PATH
+     there). The relative target resolves inside ~/.local/bin. */ -}}
+{{ if ne .chezmoi.os "darwin" }}osc52-copy{{ end }}

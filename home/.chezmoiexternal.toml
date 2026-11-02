@@ -1,0 +1,79 @@
+# Third-party zsh and tmux plugins, fetched by chezmoi itself on EVERY OS (macOS does
+# not take the zsh plugins from Homebrew, so both platforms run the same code). Being
+# chezmoi-managed, they are also kept UP TO DATE, which a clone-once install step never
+# did, and this is the only plugin list: no plugin manager runs inside zsh or tmux.
+# ~/.zshrc sources and ~/.tmux.conf `run`s exactly these paths, so a path here and its
+# user there change together.
+#
+# chezmoi renders this file as a template even without a .tmpl suffix, so keep
+# template delimiters (double curly braces) out of it, comments included.
+#
+# git-repo entries: `git clone <clone.args>` when the directory is missing, otherwise
+# `git pull <pull.args>` — but at most once per refreshPeriod (`chezmoi apply -R`
+# forces it). They need a `git` binary on PATH at apply time. install.sh runs from a
+# clone and the Lima template installs git first, but chezmoi can clone this repo
+# WITHOUT git (built-in go-git) while externals cannot, so a bare box needs git first.
+# A pull that fails (offline, captive VPN) once the period has passed stops that
+# `chezmoi apply` there: files that sort after .local/share (.tmux.conf, .zsh*) and
+# every run_after_ script are skipped until a pull succeeds; `chezmoi apply -k`
+# applies the rest anyway.
+# Clones are shallow; pulls are --ff-only and NEVER --depth: on a shallow clone,
+# `git pull --depth 1` makes every update a "divergent branches" failure. chezmoi
+# does not show their contents in `chezmoi diff`; git owns those directories.
+
+# ---- zsh plugins (sourced by ~/.zshrc) --------------------------------------------
+
+[".local/share/fzf-tab"]
+    type = "git-repo"
+    url = "https://github.com/Aloxaf/fzf-tab.git"
+    refreshPeriod = "168h"
+    clone.args = ["--depth", "1"]
+    pull.args = ["--ff-only"]
+
+[".local/share/zsh-autosuggestions"]
+    type = "git-repo"
+    url = "https://github.com/zsh-users/zsh-autosuggestions.git"
+    refreshPeriod = "168h"
+    clone.args = ["--depth", "1"]
+    pull.args = ["--ff-only"]
+
+[".local/share/zsh-fast-syntax-highlighting"]
+    type = "git-repo"
+    url = "https://github.com/zdharma-continuum/fast-syntax-highlighting.git"
+    refreshPeriod = "168h"
+    clone.args = ["--depth", "1"]
+    pull.args = ["--ff-only"]
+
+# zsh-abbr needs its zsh-job-queue git submodule: cloned without it, the plugin
+# loads with "There was a problem finishing installing dependencies". It tracks the
+# v6 branch, upstream's own way to stay on one major version, so a v7 with breaking
+# changes is an edit here rather than a surprise on some later apply.
+[".local/share/zsh-abbr"]
+    type = "git-repo"
+    url = "https://github.com/olets/zsh-abbr.git"
+    refreshPeriod = "168h"
+    clone.args = ["--recurse-submodules", "--single-branch", "--branch", "v6", "--depth", "1"]
+    pull.args = ["--ff-only", "--recurse-submodules"]
+
+# ---- tmux plugins (run by ~/.tmux.conf) --------------------------------------------
+
+# catppuccin is an ARCHIVE of a release tag, not a git-repo: a clone pinned to a tag
+# sits on a detached HEAD, where every refresh's `git pull` fails, and tracking main
+# instead would take its option renames unannounced. Bump the tag by hand from
+# https://github.com/catppuccin/tmux/releases (staying on v2.x unless tmux.conf's
+# catppuccin options get revisited). No refreshPeriod: a new tag is a new URL, which
+# is what triggers the download; until then chezmoi uses its cached copy.
+# stripComponents drops the archive's tmux-<version>/ top directory; exact deletes
+# files that a newer tag no longer ships.
+[".tmux/plugins/catppuccin"]
+    type = "archive"
+    url = "https://github.com/catppuccin/tmux/archive/refs/tags/v2.3.2.tar.gz"
+    exact = true
+    stripComponents = 1
+
+[".tmux/plugins/extrakto"]
+    type = "git-repo"
+    url = "https://github.com/laktak/extrakto.git"
+    refreshPeriod = "168h"
+    clone.args = ["--depth", "1"]
+    pull.args = ["--ff-only"]

@@ -13,10 +13,7 @@ issuesSections:
     filters: is:open assignee:@me
 defaults:
   preview:
-    open: true
     width: 60
-  prsLimit: 20
-  issuesLimit: 20
 theme:
   colors:
     text:
@@ -29,6 +26,6 @@ theme:
     background:
       selected: "#363a4f"
     border:
-      primary: "#8aadf4" # blue accent (matches tmux/lazygit/k9s)
+      primary: "#8aadf4" # blue accent (matches tmux/lazygit)
       secondary: "#494d64"
       faint: "#363a4f"

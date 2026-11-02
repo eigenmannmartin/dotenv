@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# dotenv: install runtime packages on `chezmoi apply`; idempotent, self-gating in containers.
+# dotenv: install runtime packages on `chezmoi apply`; idempotent, safe to re-run.
 #
 # Split into feature groups so a throwaway VM is not made to wait for a toolchain it
 # will never use. Pick them per machine with DOTENV_FEATURES (see .chezmoidata.toml);
 # `core` alone is just the shell, which is what most VMs actually need, and `devlite`
 # is the editor/toolchain without the container half (which is what `dev` adds).
+#
+# Shell and tmux plugins are NOT installed here: chezmoi clones them itself, on every
+# OS, from home/.chezmoiexternal.toml.
 #
 # The hash line below is load-bearing: run_onchange_ re-runs on a change to the
 # script's RENDERED text, and a feature toggle that only flips template conditionals
@@ -30,83 +33,104 @@ echo "==> dotenv: installing packages ({{ .chezmoi.os }}; features: {{ join "," 
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# One-time cleanup: a `backlog` wrapper shipped from this repo briefly (commit 3fc94f8,
-# built against the wrong project) and would now SHADOW the real Backlog.md CLI, which
-# npm installs to exactly the same path. Dropping a file from the source state does not
-# remove it — chezmoi only stops managing it — so it has to be deleted explicitly.
-#
-# NOT via .chezmoiremove: that would delete ~/.local/bin/backlog unconditionally, real
-# CLI included, on every single apply. Hence the content guard, which also skips the
-# npm install (a symlink into ../lib/node_modules) without ever reading through it.
-_stale="$HOME/.local/bin/backlog"
-if [ -f "$_stale" ] && [ ! -L "$_stale" ] \
-   && head -3 "$_stale" 2>/dev/null | grep -q "BacklogMD's kanban board"; then
-  rm -f "$_stale" \
-    && echo "==> removed the obsolete dotenv 'backlog' wrapper (Backlog.md owns that name now)"
-fi
-unset _stale
-is_container() {
-  [ -e /.dockerenv ] || [ -e /run/.containerenv ] \
-    || [ -n "${REMOTE_CONTAINERS:-}" ] || [ -n "${CODESPACES:-}" ] \
-    || [ -n "${container:-}" ]
-}
-# GUI payloads (kitty, fonts) are pointless without a display to render them on.
-# "Is it a container" was the wrong question: a Lima/cloud VM is not a container,
-# so it was downloading ~150 MB of kitty + Nerd Font into a headless box that can
-# never use either — the glyphs are rendered by the terminal on YOUR machine.
-is_headless() {
-  is_container && return 0
-  [ "$(uname -s)" = "Darwin" ] && return 1     # macOS always has a GUI
-  [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]
-}
+# Everything below installs into ~/.local/bin, and chezmoi runs this under bash with
+# whatever PATH it was started with — on a fresh VM often one without ~/.local/bin,
+# which only .zshenv adds. Then every `have` test here missed what an earlier apply
+# had installed (re-downloading it each time), and a check like `fzf --zsh` would
+# keep asking an old /usr/bin copy. Same order as .zshenv: ~/.local/bin first.
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
 
-# Fetch a binary out of a GitHub release tarball into ~/.local/bin.
-# <owner/repo> <binary> <asset-template>
-#   %V = version, %A = uname-style arch (x86_64|arm64), %G = Go-style arch (amd64|arm64),
-#   %R = Rust-triple arch (x86_64|aarch64)
-# Projects disagree on the arch token — lazygit ships x86_64, k9s ships amd64, sofka
-# ships aarch64 — and getting it wrong is invisible on one arch (uname and Go agree on
-# "arm64", uname and Rust on "x86_64") while 404ing on the other, so each caller states
-# which spelling it needs.
+# install_bin <bin> <url> [<tree-dir>]
+# The one way a release binary gets onto this machine: download <url>, put <bin> into
+# ~/.local/bin. Callers do their own "already installed?" test first (`have x ||`, or
+# a version/feature check where an old copy may be on PATH) — partly because some
+# URLs carry a version lookup that is itself a network call.
 #
-# The version is looked up through api.github.com ONLY when the asset name needs it
-# (%V). That endpoint is rate-limited to 60 requests/hour per IP unauthenticated, and
-# a few applies in a row (or a shared egress) exhaust it — after which every tool
-# here silently reported "could not resolve version". Unversioned asset names go via
-# releases/latest/download/ instead, which is a plain redirect with no such limit.
-gh_release_install() {
-  local repo="$1" bin="$2" tmpl="$3" ver arch goarch rustarch tmp asset url
-  have "$bin" && return 0
-  echo "==> installing $bin"
+#   <url> may contain %A = uname-style arch (x86_64|arm64), %G = Go-style arch
+#   (amd64|arm64), %R = Rust-triple arch (x86_64|aarch64). Projects disagree on the
+#   arch token — lazygit ships x86_64, yq ships amd64, atuin ships aarch64 — and
+#   getting it wrong is invisible on one arch (uname and Go agree on "arm64", uname
+#   and Rust on "x86_64") while 404ing on the other, so each caller states which
+#   spelling it needs.
+#   .tar.gz/.tgz and .tar.xz are unpacked and <bin> is taken from wherever it sits
+#   inside (top level, a versioned directory, linux-amd64/); any other URL is the
+#   bare binary itself.
+#   <tree-dir> keeps the WHOLE unpacked tree there instead (replacing the previous
+#   one; an archive's single top-level directory becomes <tree-dir> itself) and
+#   symlinks ~/.local/bin/<bin> into it — for releases whose binary needs its runtime
+#   files beside it (Neovim).
+#
+# Staged in a temp dir, so a failed or truncated download never lands on PATH, where
+# the caller's `have` test would then skip re-installing it. Never fatal: a miss is a
+# WARN, and the next time this run_onchange_ script runs (its text or the feature set
+# changes) retries it.
+install_bin() {
+  local bin="$1" url="$2" tree="${3:-}" arch goarch rustarch tmp src root
   case "$(uname -m)" in
     x86_64|amd64)  arch=x86_64; goarch=amd64; rustarch=x86_64 ;;
     aarch64|arm64) arch=arm64;  goarch=arm64; rustarch=aarch64 ;;
     *)             arch="$(uname -m)"; goarch="$arch"; rustarch="$arch" ;;
   esac
-  asset="${tmpl//%A/$arch}"; asset="${asset//%G/$goarch}"; asset="${asset//%R/$rustarch}"
-  if [ "${asset#*%V}" != "$asset" ]; then
-    ver="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" \
-      | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
-    [ -n "$ver" ] || { echo "WARN: could not resolve $bin version (api.github.com rate limit?)"; return 0; }
-    asset="${asset//%V/$ver}"
-    url="https://github.com/$repo/releases/download/v${ver}/${asset}"
-  else
-    url="https://github.com/$repo/releases/latest/download/${asset}"
-  fi
+  url="${url//%A/$arch}"; url="${url//%G/$goarch}"; url="${url//%R/$rustarch}"
+  echo "==> installing $bin"
+  mkdir -p "$HOME/.local/bin"
   tmp="$(mktemp -d)"
-  if curl -fLso "$tmp/a.tgz" "$url"; then
-    tar -xzf "$tmp/a.tgz" -C "$tmp" "$bin" 2>/dev/null \
-      && install -m755 "$tmp/$bin" "$HOME/.local/bin/$bin" \
-      || echo "WARN: $bin not found in archive"
+  if ! curl -fLso "$tmp/dl" "$url"; then
+    echo "WARN: $bin download failed ($url)"; rm -rf "$tmp"; return 0
+  fi
+  mkdir "$tmp/x"
+  case "$url" in
+    *.tar.gz|*.tgz) tar -xzf "$tmp/dl" -C "$tmp/x" ;;
+    *.tar.xz)       tar -xJf "$tmp/dl" -C "$tmp/x" ;;
+    *)              mv "$tmp/dl" "$tmp/x/$bin" && chmod 755 "$tmp/x/$bin" ;;
+  esac
+  src="$(find "$tmp/x" -type f -name "$bin" -perm -100 2>/dev/null | head -n 1)"
+  if [ -z "$src" ]; then
+    echo "WARN: no executable '$bin' in $url"
+  elif [ -z "$tree" ]; then
+    # rm first: install(1) would write THROUGH a symlink left there by an older
+    # installer instead of replacing it.
+    rm -f "$HOME/.local/bin/$bin"
+    install -m755 "$src" "$HOME/.local/bin/$bin" || echo "WARN: $bin install failed"
   else
-    echo "WARN: $bin download failed"
+    root="$tmp/x"; set -- "$tmp"/x/*
+    [ $# -eq 1 ] && [ -d "$1" ] && root="$1"
+    # Via <tree-dir>.new, so a copy that dies half-way (mv from /tmp is a copy) never
+    # replaces a working tree.
+    rm -rf "$tree.new" && mkdir -p "${tree%/*}" && mv "$root" "$tree.new" \
+      && rm -rf "$tree" && mv "$tree.new" "$tree" \
+      && ln -sfn "$tree/${src#"$root"/}" "$HOME/.local/bin/$bin" \
+      || echo "WARN: $bin install into $tree failed"
   fi
   rm -rf "$tmp"
 }
 
-# Global npm CLIs (devcontainer, claude, codex). Defined unconditionally because more
-# than one feature needs it.
-npm_global_install() {   # <package> [min-node-major]
+# gh_release_install <owner/repo> <bin> <asset-template> [<tree-dir>]
+# install_bin for a GitHub release asset; the template takes install_bin's arch
+# tokens plus %V = version.
+#
+# Everything goes through releases/latest/download/, a plain redirect to
+# releases/download/<tag>/, and never through api.github.com: that API allows 60
+# unauthenticated requests/hour per IP, every Lima VM shares the Mac's public IP, and
+# a run_onchange_ script that misses a tool does not run again until its text changes.
+# An unversioned asset name is downloaded through the redirect directly. For %V, the
+# tag is read from where the redirect points (without following it), and %V is that
+# tag minus a leading "v".
+gh_release_install() {
+  local repo="$1" bin="$2" asset="$3" tag
+  if [ "${asset#*%V}" != "$asset" ]; then
+    tag="$(curl -fsS -o /dev/null -w '%{redirect_url}' "https://github.com/$repo/releases/latest/download/x" \
+      | sed -n 's#.*/releases/download/\([^/]*\)/x$#\1#p')"
+    [ -n "$tag" ] || { echo "WARN: could not resolve $bin version"; return 0; }
+    install_bin "$bin" "https://github.com/$repo/releases/download/${tag}/${asset//%V/${tag#v}}" "${4:-}"
+  else
+    install_bin "$bin" "https://github.com/$repo/releases/latest/download/${asset}" "${4:-}"
+  fi
+}
+
+# Global npm CLIs (pnpm, prettier, claude, codex, backlog). Defined unconditionally
+# because more than one feature needs it.
+npm_global_install() {   # <package> <binary> [min-node-major]
   have "$2" && return 0
   # Loud, and says what to do: this silently swallowed every npm install on a fresh
   # Ubuntu VM, because `nodejs` there ships without npm.
@@ -133,19 +157,11 @@ if have brew; then
   # --no-upgrade: install only what's missing; don't churn already-installed tools.
   # Brewfile.<feature> files are additive; a missing one is simply skipped.
   for _bf in Brewfile {{ if $devlite }}Brewfile.devlite{{ end }} {{ if $dev }}Brewfile.dev{{ end }} {{ if $k8s }}Brewfile.k8s{{ end }} {{ if $flutter }}Brewfile.flutter{{ end }}; do
-    _p="{{ .chezmoi.workingTree }}/$_bf"
+    _p="{{ .chezmoi.sourceDir | dir }}/$_bf"
     [ -f "$_p" ] || continue
     brew bundle --no-upgrade --file "$_p" || echo "WARN: brew bundle ($_bf) had failures"
   done
   unset _bf _p
-
-  # Prune broken zsh completion symlinks (Docker cask rename orphaned _docker links) so compinit doesn't error; -L follows links so only dead ones match.
-  _bsf="$(brew --prefix 2>/dev/null)/share/zsh/site-functions"
-  if [ -d "$_bsf" ]; then
-    find -L "$_bsf" -maxdepth 1 -type l -delete 2>/dev/null \
-      && echo "==> pruned broken zsh completion symlinks in $_bsf"
-  fi
-  unset _bsf
 else
   echo "WARN: Homebrew not found — install from https://brew.sh and re-run 'chezmoi apply'."
 fi
@@ -161,9 +177,11 @@ if have apt-get; then
 
   # core — the shell itself. kitty-terminfo + ncurses-term: ssh forwards $TERM but
   # not terminfo. Without an xterm-kitty entry, tmux refuses to start outright and
-  # OSC 52 (clipboard over ssh) is unavailable. See 25-terminfo for the fallbacks.
-  apt_install zsh tmux git curl unzip ca-certificates fontconfig \
-    ripgrep fzf bat kitty-terminfo ncurses-term \
+  # OSC 52 (clipboard over ssh) is unavailable; 25-terminfo retries it on every apply.
+  # fzf is deliberately NOT here (see the release binaries below). unzip: Mason
+  # (LazyVim's LSP installer) unpacks most servers with it.
+  apt_install zsh tmux git curl unzip ca-certificates \
+    ripgrep bat kitty-terminfo ncurses-term \
     || echo "WARN: some core apt packages failed to install"
 
 {{ if $devlite }}
@@ -172,11 +190,13 @@ if have apt-get; then
   #
   # npm is listed EXPLICITLY: Debian/Ubuntu split it out of the nodejs package, so
   # `nodejs` alone gives you `node` and no `npm`. Everything installed through npm
-  # below (devcontainer, claude, codex) then silently skipped with a warning that
+  # below (pnpm, prettier, claude, codex) then silently skipped with a warning that
   # scrolled past during provisioning.
   # gh: Ubuntu's universe build is fine for PR/issue work; the login persists across
   # VMs via dotenv-persist (.config/gh/hosts.yml).
-  apt_install neovim python3 nodejs npm jq btop direnv gh pipx git-lfs \
+  # build-essential: a C compiler, which nvim-treesitter needs to build its parsers.
+  # Neovim itself is NOT here: apt's is too old for LazyVim (see below).
+  apt_install python3 nodejs npm jq btop direnv gh pipx git-lfs build-essential \
     || echo "WARN: some dev apt packages failed to install"
   # pre-commit via pipx, not apt: hook repos routinely demand a minimum pre-commit
   # version newer than the distro package.
@@ -194,9 +214,9 @@ if have apt-get; then
     || echo "WARN: openconnect-saml install failed (needed for embedded-SAML head-ends)"
 {{ end }}
 {{ if $docker }}
-  # docker — a container runtime *inside* the VM, so devcontainers (and `dx`) run here
-  # rather than against OrbStack on the Mac. The devcontainer CLI shells out to the
-  # `docker` binary specifically, which is why this is docker.io and not containerd.
+  # docker — a docker engine inside the Linux VM itself (on macOS, OrbStack via "dev"
+  # provides one). docker.io + compose v2 from apt; the user joins the docker group so
+  # `docker` works without sudo.
   apt_install docker.io docker-compose-v2 \
     || echo "WARN: docker apt packages failed to install"
   if have docker && ! id -nG "$(id -un)" | grep -qw docker; then
@@ -222,227 +242,80 @@ else
   echo "WARN: apt-get not found; this installer targets Debian/Ubuntu."
 fi
 
-# atuin — core (Ctrl-R is atuin on every box), not reliably packaged in apt, so the
-# official installer. It lands in ~/.atuin/bin, which NOTHING puts on PATH except the
-# `. ~/.atuin/bin/env` line in ~/.zshrc — and this script runs under bash from chezmoi,
-# so `have atuin` was false on every single apply: atuin got re-downloaded every time,
-# while `ssh vm atuin status`, `secrets login atuin` and any other non-interactive
-# caller still reported it missing. Link it into ~/.local/bin, which .zshenv puts on
-# PATH for EVERY shell (interactive or not), and check for the real path here.
+# core — upstream release binaries (macOS gets all three from Brewfile).
 #
-# --non-interactive is REQUIRED, not a preference. To decide whether it may prompt,
-# setup.atuin.sh otherwise probes for a terminal with `exec 3</dev/tty` — and during
-# `vm new` there is no controlling tty, so that redirection fails. /bin/sh is dash on
-# Debian/Ubuntu, where a failed redirection on the special builtin `exec` kills the
-# shell outright (POSIX), and neither the `{ ...; } 2>/dev/null` wrapper nor the
-# surrounding `if` stops it. The installer therefore died at line 15 with status 2 and
-# NO output whatsoever, leaving a bare "WARN: atuin install failed" in the provisioning
-# log and every fresh VM without atuin. The flag short-circuits the probe entirely.
-_atuin="$HOME/.atuin/bin/atuin"
-if ! have atuin && [ ! -x "$_atuin" ]; then
-  echo "==> installing atuin"
-  curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh \
-    | sh -s -- --non-interactive || echo "WARN: atuin install failed"
-fi
-# Relink only when it isn't already right (so this stays quiet on re-apply), and only
-# over nothing or a symlink — never over a real binary someone put there by hand. The
-# -h test matters on its own: a link to a since-removed atuin must be re-pointed, and
-# -e follows the link and calls it absent.
-_link="$HOME/.local/bin/atuin"
-if [ -x "$_atuin" ] && [ "$(readlink "$_link" 2>/dev/null)" != "$_atuin" ] \
-   && { [ ! -e "$_link" ] || [ -h "$_link" ]; }; then
-  mkdir -p "$HOME/.local/bin"
-  ln -sfn "$_atuin" "$_link" \
-    && echo "==> linked atuin into ~/.local/bin (on PATH for non-interactive shells too)"
-fi
-unset _atuin _link
-
-if ! have oh-my-posh; then
-  echo "==> installing oh-my-posh"
-  mkdir -p "$HOME/.local/bin"
-  curl -s https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin" \
-    || echo "WARN: oh-my-posh install failed"
-fi
+# fzf: apt's is too old on bookworm (0.38) and 24.04 (0.44). `fzf --zsh` needs 0.48 —
+# without it Ctrl-T, Alt-C and ** are silently missing — and the `selected-bg` colour
+# in ~/.zshrc needs 0.52, so an older fzf rejects every call (fzf-tab, the
+# sessionizer, ssh-launch, extrakto). Test the capability, not `have fzf`: a box
+# provisioned earlier still has apt's copy on PATH. The new one lands in
+# ~/.local/bin, which comes first, so the old package can stay.
+fzf --zsh >/dev/null 2>&1 || gh_release_install junegunn/fzf fzf 'fzf-%V-linux_%G.tar.gz'
+# atuin: the MUSL build, not gnu. The gnu binary needs glibc 2.39 and fails to start
+# on bookworm (2.36) and jammy (2.35) — and `have atuin` would then see it and never
+# retry. Ctrl-R is atuin on every box, hence core.
+have atuin || gh_release_install atuinsh/atuin atuin 'atuin-%R-unknown-linux-musl.tar.gz'
+# oh-my-posh: a single static binary; the prompt config is ~/.config/oh-my-posh.
+have oh-my-posh || gh_release_install JanDeDobbeleer/oh-my-posh oh-my-posh 'posh-linux-%G'
 
 {{ if $devlite }}
-mkdir -p "$HOME/.local/bin"
-gh_release_install jesseduffield/lazygit lazygit 'lazygit_%V_Linux_%A.tar.gz'
+have lazygit || gh_release_install jesseduffield/lazygit lazygit 'lazygit_%V_Linux_%A.tar.gz'
+
+# Neovim: LazyVim needs >= 0.11.2, and apt ships 0.7.2 (bookworm), 0.9.5 (24.04),
+# 0.10.4 (25.10). Gated on the version rather than `have nvim`, since an older box
+# already has apt's /usr/bin/nvim; ~/.local/bin/nvim comes first on PATH. The release
+# tarball is a whole tree (runtime files, bundled parsers), so it is kept as one in
+# ~/.local/opt/nvim and only the binary is linked into ~/.local/bin.
+_nv="$(nvim --version 2>/dev/null | sed -n '1s/^NVIM v\([0-9][0-9.]*\).*/\1/p')"
+if [ -z "$_nv" ] || ! printf '%s\n' 0.11.2 "$_nv" | sort -C -V; then
+  gh_release_install neovim/neovim nvim 'nvim-linux-%A.tar.gz' "$HOME/.local/opt/nvim"
+fi
+unset _nv
+
+# yq — mikefarah's (Go, jq-style YAML), the one Brewfile.devlite installs on macOS.
+# NEVER apt's `yq`: that package is kislyuk's Python jq wrapper, a different tool
+# with different flags. Checked by --version for the same reason: a box may already
+# have apt's under the same name.
+yq --version 2>/dev/null | grep -q mikefarah \
+  || gh_release_install mikefarah/yq yq 'yq_linux_%G'
+
+# worktrunk (`wt`) — git worktrees in sibling repo.branch directories, for running
+# agents in parallel. Linux releases are musl .tar.xz only. Shell integration is the
+# guarded `wt config shell init zsh` in ~/.zshrc; never `wt config shell install`,
+# which would edit a ~/.zshrc that chezmoi owns.
+have wt || gh_release_install max-sixty/worktrunk wt 'worktrunk-%R-unknown-linux-musl.tar.xz'
 {{ end }}
 {{ if $dev }}
 # dev — the container layer. OrbStack is macOS-only, so on Linux this is just the
 # clients; the engine itself comes from the "docker" feature (apt docker.io) or from a
-# DOCKER_HOST pointing somewhere else. ctop is not here: it publishes a bare binary
-# rather than a tarball, which gh_release_install cannot unpack — use `docker stats`.
-mkdir -p "$HOME/.local/bin"
-gh_release_install jesseduffield/lazydocker lazydocker 'lazydocker_%V_Linux_%A.tar.gz'
-gh_release_install wagoodman/dive dive 'dive_%V_linux_%G.tar.gz'
+# DOCKER_HOST pointing somewhere else.
+have lazydocker || gh_release_install jesseduffield/lazydocker lazydocker 'lazydocker_%V_Linux_%A.tar.gz'
+have dive || gh_release_install wagoodman/dive dive 'dive_%V_linux_%G.tar.gz'
 {{ end }}
 {{ if $k8s }}
-mkdir -p "$HOME/.local/bin"
-gh_release_install derailed/k9s k9s 'k9s_Linux_%G.tar.gz'
-# sofka — k9s reimagined in Rust: generic CRD pipeline, Flux/Argo actions built in,
-# `X` incident view. Kept alongside k9s rather than replacing it.
-gh_release_install nklmilojevic/sofka sofka 'sofka-v%V-%R-unknown-linux-gnu.tar.gz'
+# sofka — Kubernetes TUI in Rust: generic CRD pipeline, Flux/Argo actions built in,
+# `X` incident view.
+have sofka || gh_release_install nklmilojevic/sofka sofka 'sofka-v%V-%R-unknown-linux-gnu.tar.gz'
 
-# argocd — publishes bare binaries rather than release tarballs, so
-# gh_release_install cannot unpack it; `latest/download` also spares the version
-# lookup. Login persists across VMs via dotenv-persist (.config/argocd/config).
-if ! have argocd; then
-  echo "==> installing argocd"
-  case "$(uname -m)" in
-    x86_64|amd64)  _aarch=amd64 ;;
-    aarch64|arm64) _aarch=arm64 ;;
-    *)             _aarch="$(uname -m)" ;;
-  esac
-  _atmp="$(mktemp)"
-  if curl -fLso "$_atmp" \
-      "https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-${_aarch}"; then
-    install -m755 "$_atmp" "$HOME/.local/bin/argocd"
-  else
-    echo "WARN: argocd download failed"
-  fi
-  rm -f "$_atmp"
-  unset _aarch _atmp
-fi
+# argocd — login persists across VMs via dotenv-persist (.config/argocd/config).
+have argocd || gh_release_install argoproj/argo-cd argocd 'argocd-linux-%G'
 
-# amtui — k9s-style TUI for Alertmanager (alerts, silences). The HSG ingress
-# (alertmanager.hpcmgmt.unisg.ch) sits behind SSO, so point it at a port-forward:
-#   kubectl -n monitoring-prometheus port-forward svc/monitoring-prometheus-kube-alertmanager 9093 &
-#   amtui --host localhost --port 9093
-gh_release_install pehlicd/amtui amtui 'amtui_v%V_linux_%G.tar.gz'
-
-# runai — the Run:ai researcher CLI. Every control-plane download endpoint sits
-# behind SSO (bearer token), so a fresh box can only bootstrap from the login that
-# dotenv-persist carries over in ~/.runai/authentication.json — the CLI refreshes
-# that token whenever it is used on any box sharing the store. The dist path is
-# unversioned on purpose: the control plane serves the build matching itself, and
-# the CLI keeps itself current afterwards (`runai upgrade` installs into
-# ~/.runai/bin, which zshrc then prefers over this bootstrap copy).
-if ! have runai && [ ! -x "$HOME/.runai/bin/runai" ]; then
-  _rauth="$HOME/.runai/authentication.json"
-  if [ -r "$_rauth" ]; then
-    echo "==> installing runai CLI"
-    _rtok="$(sed -n 's/.*"accessToken":[[:space:]]*"\([^"]*\)".*/\1/p' "$_rauth" | base64 -d 2>/dev/null)"
-    case "$(uname -m)" in
-      x86_64|amd64)  _rarch=amd64 ;;
-      aarch64|arm64) _rarch=arm64 ;;
-      *)             _rarch="$(uname -m)" ;;
-    esac
-    _rtmp="$(mktemp)"
-    if [ -n "$_rtok" ] && curl -fLso "$_rtmp" -m 60 -H "Authorization: Bearer $_rtok" \
-        "https://runai.hpc.unisg.ch/api/v1/cli-exposer/dist/linux/${_rarch}/runai"; then
-      install -m755 "$_rtmp" "$HOME/.local/bin/runai"
-    else
-      echo "WARN: runai download failed — VPN down, or the persisted token is stale" \
-           "(it lives ~a day; running runai on any other box refreshes it). Re-run after fixing either."
-    fi
-    rm -f "$_rtmp"
-  else
-    echo "WARN: runai skipped — no persisted ~/.runai/authentication.json (log in once on a box with dotenv-persist active)"
-  fi
-  unset _rauth _rtok _rarch _rtmp
-fi
-
-# kubectl publishes a bare binary on dl.k8s.io rather than a GitHub release tarball,
-# so gh_release_install cannot fetch it — hence the hand-rolled copy of its arch case.
-# On macOS this comes from OrbStack (Brewfile.dev) instead; on Linux there is no
-# equivalent, and k9s without kubectl is half a toolchain.
+# kubectl lives on dl.k8s.io, not in a GitHub release. On macOS it comes from OrbStack
+# (Brewfile.dev) instead; on Linux there is no equivalent, and the k8s tools without
+# kubectl are half a toolchain.
 # stable.txt is whatever upstream just released; kubectl supports a server within one
 # minor of itself, so hardcode a version here if a cluster ever falls further behind.
-if ! have kubectl; then
-  echo "==> installing kubectl"
-  case "$(uname -m)" in
-    x86_64|amd64)  _karch=amd64 ;;
-    aarch64|arm64) _karch=arm64 ;;
-    *)             _karch="$(uname -m)" ;;
-  esac
-  _kver="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
-  if [ -z "$_kver" ]; then
-    echo "WARN: could not resolve kubectl version"
-  else
-    # Staged through a temp file so a failed download cannot leave a truncated
-    # binary sitting on PATH, where `have kubectl` would then skip re-installing it.
-    _ktmp="$(mktemp)"
-    if curl -fLso "$_ktmp" \
-        "https://dl.k8s.io/release/${_kver}/bin/linux/${_karch}/kubectl"; then
-      install -m755 "$_ktmp" "$HOME/.local/bin/kubectl"
-    else
-      echo "WARN: kubectl download failed"
-    fi
-    rm -f "$_ktmp"
-  fi
-  unset _kver _karch _ktmp
-fi
+have kubectl || install_bin kubectl \
+  "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/%G/kubectl"
 
-# helm — the same story as kubectl: its GitHub releases carry no assets (the tarballs
-# live on get.helm.sh), and the binary sits under a linux-<arch>/ directory inside
-# the archive, which gh_release_install's top-level extract would miss. macOS gets
-# it from Brewfile.k8s.
-if ! have helm; then
-  echo "==> installing helm"
-  case "$(uname -m)" in
-    x86_64|amd64)  _harch=amd64 ;;
-    aarch64|arm64) _harch=arm64 ;;
-    *)             _harch="$(uname -m)" ;;
-  esac
-  _hver="$(curl -fsSL https://get.helm.sh/helm-latest-version)"
-  if [ -z "$_hver" ]; then
-    echo "WARN: could not resolve helm version"
-  else
-    _htmp="$(mktemp -d)"
-    if curl -fLso "$_htmp/helm.tgz" \
-        "https://get.helm.sh/helm-${_hver}-linux-${_harch}.tar.gz"; then
-      tar -xzf "$_htmp/helm.tgz" -C "$_htmp" "linux-${_harch}/helm" 2>/dev/null \
-        && install -m755 "$_htmp/linux-${_harch}/helm" "$HOME/.local/bin/helm" \
-        || echo "WARN: helm not found in archive"
-    else
-      echo "WARN: helm download failed"
-    fi
-    rm -rf "$_htmp"
-  fi
-  unset _hver _harch _htmp
-fi
+# helm — its GitHub releases carry no assets; the tarballs live on get.helm.sh, with
+# the binary under linux-<arch>/. macOS gets it from Brewfile.k8s.
+have helm || install_bin helm \
+  "https://get.helm.sh/helm-$(curl -fsSL https://get.helm.sh/helm-latest-version)-linux-%G.tar.gz"
 {{ end }}
-
-# Desktop-only: kitty + FiraCode Nerd Font. Skipped anywhere without a display —
-# containers AND headless VMs. When you ssh in from kitty on a Mac, the font and the
-# terminal both live on the Mac; the remote only ever needs the terminfo entry.
-if is_headless; then
-  echo "==> headless (no display): skipping kitty + fonts — terminfo is all a remote needs"
-else
-  if ! have kitty; then
-    echo "==> installing kitty"
-    curl -L https://sw.kovidgoyal.net/kitty/installer.sh | sh /dev/stdin launch=n \
-      || echo "WARN: kitty install failed"
-  fi
-  if ! fc-list 2>/dev/null | grep -qi "FiraCode Nerd Font"; then
-    echo "==> installing FiraCode Nerd Font"
-    FONT_DIR="$HOME/.local/share/fonts"; mkdir -p "$FONT_DIR"
-    tmpzip="$(mktemp)"
-    if curl -fLso "$tmpzip" \
-        https://github.com/ryanoasis/nerd-fonts/releases/latest/download/FiraCode.zip; then
-      unzip -oq "$tmpzip" -d "$FONT_DIR" && fc-cache -f "$FONT_DIR" >/dev/null 2>&1
-    else
-      echo "WARN: FiraCode Nerd Font download failed"
-    fi
-    rm -f "$tmpzip"
-  fi
-fi
 
 {{ else -}}
 echo "WARN: unsupported OS '{{ .chezmoi.os }}' — install tmux/atuin/oh-my-posh manually."
-{{ end -}}
-
-# Shell plugins not in package managers: clone to ~/.local/share
-clone_plugin() {  # <repo-url> <dir-name>
-  local d="$HOME/.local/share/$2"
-  [ -d "$d" ] || git clone --depth 1 "$1" "$d" 2>/dev/null || echo "WARN: clone $2 failed"
-}
-clone_plugin https://github.com/Aloxaf/fzf-tab fzf-tab
-{{ if eq .chezmoi.os "linux" -}}
-# On macOS these come from Homebrew; on Linux clone them (apt's are older/absent).
-clone_plugin https://github.com/zsh-users/zsh-autosuggestions zsh-autosuggestions
-clone_plugin https://github.com/zdharma-continuum/fast-syntax-highlighting zsh-fast-syntax-highlighting
 {{ end -}}
 
 # bat >= 0.26 bundles the Catppuccin themes (Homebrew ships that); apt's 0.25 does not,
@@ -491,49 +364,7 @@ fi
 # range / end indentation, leaves the YAML alone). No Homebrew formula, but its
 # releases ship a root-level binary for both OSes, so this runs on macOS too — the
 # only tool here that does. Wire it up per project via .helmfmt / pre-commit.
-mkdir -p "$HOME/.local/bin"
-gh_release_install digitalstudium/helmfmt helmfmt 'helmfmt_{{ title .chezmoi.os }}_%A.tar.gz'
-
-# k9s config.yaml is k9s-managed (rewritten on exit), so patch only our preference keys in place once it exists; yq preferred, python fallback.
-# enableMouse=false on purpose: with it on, k9s grabs the mouse and its reactive refresh wipes any selection — you can't copy.
-# Off, a drag falls through to tmux copy-mode (a frozen snapshot tmux-yank copies cleanly); read/copy structured output via the Shift-D/Y/X/E pager plugins.
-if have k9s; then
-  _k9s_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/k9s/config.yaml"
-  if [ -f "$_k9s_cfg" ] && have yq; then
-    yq -i '
-      .k9s.ui.skin = "catppuccin-macchiato" |
-      .k9s.ui.reactive = true |
-      .k9s.ui.enableMouse = false |
-      .k9s.liveViewAutoRefresh = true |
-      .k9s.skipLatestRevCheck = true |
-      .k9s.maxConnRetry = 15 |
-      .k9s.shellPod.image = "nicolaka/netshoot:latest" |
-      .k9s.logger.tail = 5000 |
-      .k9s.logger.buffer = 50000 |
-      .k9s.logger.textWrap = true |
-      .k9s.logger.showTime = true
-    ' "$_k9s_cfg" 2>/dev/null \
-      && echo "==> patched k9s config.yaml (skin + reactive UI + logger + netshoot shellPod)" \
-      || echo "WARN: k9s config.yaml patch (yq) failed"
-  elif [ -f "$_k9s_cfg" ]; then
-    python3 - "$_k9s_cfg" <<'PY' 2>/dev/null || true
-import sys, re
-p = sys.argv[1]; s = open(p).read()
-def setk(block, key, val, s):
-    if re.search(rf'^    {key}:', s, re.M):
-        return re.sub(rf'^    {key}:.*$', f'    {key}: {val}', s, count=1, flags=re.M)
-    if re.search(rf'^  {block}:\s*$', s, re.M):
-        return re.sub(rf'^  {block}:\s*$', f'  {block}:\n    {key}: {val}', s, count=1, flags=re.M)
-    return s
-if 'skin:' not in s:
-    s = setk('ui', 'skin', 'catppuccin-macchiato', s)
-s = setk('logger', 'tail', '5000', s)
-s = setk('logger', 'buffer', '50000', s)
-s = setk('logger', 'textWrap', 'true', s)
-open(p, 'w').write(s)
-PY
-  fi
-fi
+have helmfmt || gh_release_install digitalstudium/helmfmt helmfmt 'helmfmt_{{ title .chezmoi.os }}_%A.tar.gz'
 {{ end }}
 
 {{ if $devlite }}
@@ -542,10 +373,6 @@ if have gh; then
     || gh extension install dlvhdr/gh-dash >/dev/null 2>&1 || true
 fi
 
-# The devcontainer CLI is a node package, not a container runtime — it needs *a*
-# docker to talk to (OrbStack via "dev", or apt docker.io via "docker"), but installing
-# it on a devlite box costs nothing and keeps `dx` working against a remote engine.
-npm_global_install @devcontainers/cli devcontainer
 # pnpm — the package manager most JS projects here pin (`packageManager` field); it
 # takes over from itself once installed, so this bootstrap copy only has to exist.
 # prettier — a global copy so LazyVim's formatter (conform → prettier) works in a
@@ -569,7 +396,7 @@ npm_global_install backlog.md backlog
 {{ end }}
 
 {{ if eq .chezmoi.os "linux" -}}
-# This repo is zsh-only (~10 KB of ~/.zshrc: prompt, aliases, fzf-tab, tmux autostart).
+# This repo is zsh-only (~10 KB of ~/.zshrc: prompt, aliases, abbreviations, fzf-tab).
 # On a box where the login shell is still bash — the default for a fresh Lima/cloud VM —
 # ALL of it is inert, and nothing says so, which is easy to miss over ssh.
 # macOS already defaults to zsh, so this is Linux-only. Opt out with DOTENV_NO_CHSH=1.

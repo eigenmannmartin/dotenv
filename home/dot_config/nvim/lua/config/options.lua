@@ -2,7 +2,7 @@
 -- Default options that are always set: https://github.com/LazyVim/LazyVim/blob/main/lua/lazyvim/config/options.lua
 -- Add any additional options here
 
--- Clipboard on a headless remote (Lima VM, container, any plain `ssh` box).
+-- Clipboard on headless Linux (Lima VM, container, any plain `ssh` box).
 --
 -- There is no pasteboard and no X11/Wayland there, so nvim has no clipboard
 -- provider and yanks go nowhere. OSC 52 fixes it: nvim writes an escape
@@ -17,19 +17,19 @@
 -- below, which kills the second condition outright, so the explicit
 -- `g:clipboard` is not optional here — do not delete it.
 --
--- Gated to remote+headless so macOS and Linux desktops keep their native
--- pasteboard, which is strictly better (and supports paste, which OSC 52
--- effectively does not — see below).
-local function remote_headless()
+-- Gated to Linux with no display server so macOS keeps pbcopy and Linux
+-- desktops keep their native provider, which is strictly better (and supports
+-- paste, which OSC 52 effectively does not — see below). Deliberately NOT gated
+-- on $SSH_TTY/$SSH_CONNECTION: those are missing whenever the shell did not come
+-- from sshd (docker exec, a devcontainer), and there yanks silently went nowhere.
+local function linux_headless()
   local function blank(v)
     return v == nil or v == ""
   end
-  return (not blank(vim.env.SSH_TTY) or not blank(vim.env.SSH_CONNECTION))
-    and blank(vim.env.DISPLAY)
-    and blank(vim.env.WAYLAND_DISPLAY)
+  return vim.fn.has("linux") == 1 and blank(vim.env.DISPLAY) and blank(vim.env.WAYLAND_DISPLAY)
 end
 
-if remote_headless() then
+if linux_headless() then
   local ok, osc52 = pcall(require, "vim.ui.clipboard.osc52")
   if ok then
     -- Paste deliberately does NOT use OSC 52: reading the clipboard needs the
@@ -62,9 +62,16 @@ if remote_headless() then
     -- LazyVim sets `clipboard = ""` whenever $SSH_CONNECTION is set, so that
     -- nvim's own auto-detection can engage. We pinned the provider above, and an
     -- empty `clipboard` means a plain `yy` never touches the "+ register, so
-    -- nothing is ever sent — only an explicit `"+y` works. Turn it back on for
-    -- parity with macOS. The `&clipboard == ""` guard in provider/clipboard.vim
-    -- only guards the auto-detect branch, so the explicit g:clipboard still wins.
+    -- nothing is ever sent — only an explicit `"+y` works. Turn it back on (the
+    -- macOS branch below does the same). The `&clipboard == ""` guard in
+    -- provider/clipboard.vim only guards the auto-detect branch, so the explicit
+    -- g:clipboard still wins.
     vim.o.clipboard = "unnamedplus"
   end
+elseif vim.fn.has("mac") == 1 then
+  -- The same LazyVim rule bites on macOS: with $SSH_CONNECTION set (an ssh session
+  -- into the Mac, or a tmux pane that kept it from a client that attached over ssh)
+  -- a plain `yy` would skip the "+ register and copy nowhere. Keep `y` on nvim's
+  -- macOS provider (pbcopy), where the mouse-release copy in keymaps.lua goes too.
+  vim.o.clipboard = "unnamedplus"
 end

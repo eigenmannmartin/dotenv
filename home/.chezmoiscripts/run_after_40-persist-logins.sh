@@ -27,6 +27,7 @@ _ident="${XDG_CONFIG_HOME:-$HOME/.config}/git/identity"
 
 # Checked before writing so re-applies stay quiet, and matched against the literal ~
 # we write — include.path keeps the tilde and expands it when read.
+# shellcheck disable=SC2088  # the literal ~ is the point: include.path stores it unexpanded
 if ! git config --global --get-all include.path 2>/dev/null | grep -qxF '~/.config/git/identity'; then
   git config --global --add include.path '~/.config/git/identity'
   echo "==> ~/.gitconfig now includes ~/.config/git/identity (shared between VMs)"

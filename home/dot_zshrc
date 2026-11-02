@@ -2,15 +2,7 @@
 # (A $TERM with no terminfo entry on this machine makes tmux refuse to start.)
 [ -r "$HOME/.config/dotenv/term-guard.sh" ] && . "$HOME/.config/dotenv/term-guard.sh"
 
-if command -v oh-my-posh >/dev/null; then
-  _omp_cfg="$HOME/.config/oh-my-posh/config.omp.json"
-  if [[ -r "$_omp_cfg" ]]; then
-    eval "$(oh-my-posh init zsh --config "$_omp_cfg")"
-  else
-    eval "$(oh-my-posh init zsh)"
-  fi
-  unset _omp_cfg
-fi
+command -v oh-my-posh >/dev/null && eval "$(oh-my-posh init zsh --config "$HOME/.config/oh-my-posh/config.omp.json")"
 
 typeset -gA DOTENV_PROJECT_COLOR_MAP=(
   hsg        '#a6da95'   # green
@@ -79,26 +71,11 @@ fi
 # `compaudit | xargs chmod go-w` fixes them for good.
 # Startup dragging? `compinit -C` skips the security check entirely.
 autoload -Uz compinit && compinit -i
-# runai lives in ~/.runai/bin once it has self-upgraded (`runai upgrade`), or in
-# ~/.local/bin from the install-script bootstrap. PREPENDED: ~/.local/bin is already
-# near the front of PATH, so appending would leave a stale bootstrap copy shadowing
-# every future self-upgrade.
-[ -d "$HOME/.runai/bin" ] && export PATH=$HOME/.runai/bin:$PATH
-# runai prints "Failed to check for CLI updates." onto stdout, polluting the sourced completion; strip it.
-if command -v runai >/dev/null 2>&1; then
-  source <(runai completion zsh 2>/dev/null | grep -v 'Failed to check for CLI updates')
-fi
 
 # Use 1Password agent only when its socket exists, so devcontainer/Codespaces forwarded SSH_AUTH_SOCK is left alone.
 _op_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
 [ -S "$_op_sock" ] && export SSH_AUTH_SOCK="$_op_sock"
 unset _op_sock
-
-[ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
-# atuin's official installer puts the binary in ~/.atuin/bin and appends this to the
-# shell rc itself — which chezmoi then reverts, since it owns ~/.zshrc. Own it here so
-# `atuin init` below actually finds atuin on a Linux box installed via that script.
-[ -f "$HOME/.atuin/bin/env" ] && . "$HOME/.atuin/bin/env"
 
 # XDG: make lazygit & friends read ~/.config (macOS defaults elsewhere otherwise)
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -109,11 +86,6 @@ export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 # `vm rm` takes it with it. Backgrounded so a slow host mount can't stall the prompt;
 # a no-op (and instant) on any box without a persist dir, i.e. every Mac.
 [ -x "$HOME/.local/bin/dotenv-persist" ] && ("$HOME/.local/bin/dotenv-persist" link >/dev/null 2>&1 &)
-
-# atuin — one shared history, synced from the server. Every box (VM included) sees
-# the same commands once `secrets login atuin` has run; the login itself survives a
-# rebuild via ~/.local/bin/dotenv-persist.
-command -v atuin >/dev/null && eval "$(atuin init zsh)"
 
 if command -v eza >/dev/null; then
   alias ls='eza --icons --group-directories-first --color=auto'
@@ -134,14 +106,13 @@ fi
 if command -v bat >/dev/null; then
   export BAT_THEME="Catppuccin Macchiato"
   alias cat='bat --style=plain --paging=never'
+  export MANPAGER="sh -c 'col -bx | bat -l man -p'" MANROFFOPT='-c'
 elif command -v batcat >/dev/null; then
   export BAT_THEME="Catppuccin Macchiato"
   alias bat='batcat'
   alias cat='batcat --style=plain --paging=never'
+  export MANPAGER="sh -c 'col -bx | batcat -l man -p'" MANROFFOPT='-c'
 fi
-
-# ctop's termbox panics on TERM like xterm-kitty/tmux-256color; force a recognized TERM.
-command -v ctop >/dev/null && alias ctop='TERM=xterm-256color ctop'
 
 # Esc-Esc toggles leading `sudo` (on empty line, prefixes previous command).
 _sudo_toggle() {
@@ -157,8 +128,10 @@ zle -N _sudo_toggle
 bindkey -M emacs '\e\e' _sudo_toggle
 bindkey -M viins '\e\e' _sudo_toggle
 
-_src() { local f; for f in "$@"; do [[ -r "$f" ]] && { source "$f"; return 0; }; done; return 1; }
-_zshare="${HOMEBREW_PREFIX:-/opt/homebrew}/share"
+# zsh plugins are git checkouts that chezmoi keeps in ~/.local/share on every OS
+# (.chezmoiexternal.toml). Sourced only if present, so a box chezmoi has not
+# finished with yet still gets a working shell.
+_src() { [[ -r "$1" ]] && source "$1"; }
 command -v fzf >/dev/null && eval "$(fzf --zsh 2>/dev/null)"
 if command -v fzf >/dev/null; then
   export FZF_DEFAULT_OPTS="\
@@ -181,18 +154,40 @@ if command -v fzf >/dev/null; then
   export FZF_CTRL_T_OPTS="--preview 'bat --color=always --style=numbers --line-range :300 {} 2>/dev/null || eza -la --color=always --icons=always {}'"
   export FZF_ALT_C_OPTS="--preview 'eza --tree --level=2 --color=always --icons=always {} | head -200'"
 fi
+
+# atuin — one shared history, synced from the server. Every box (VM included) sees
+# the same commands once `secrets login atuin` has run; the login itself survives a
+# rebuild via ~/.local/bin/dotenv-persist. After `fzf --zsh` on purpose: both bind
+# Ctrl-R, and the later one wins.
+command -v atuin >/dev/null && eval "$(atuin init zsh)"
+
 # fzf-tab needs compinit first.
 _src "$HOME/.local/share/fzf-tab/fzf-tab.plugin.zsh"
 zstyle ':fzf-tab:*' use-fzf-default-opts yes
 zstyle ':fzf-tab:complete:cd:*' fzf-preview 'eza --tree --level=2 --color=always --icons=always $realpath 2>/dev/null'
 zstyle ':fzf-tab:complete:*:*' fzf-preview 'bat --color=always --style=plain --line-range :200 $realpath 2>/dev/null || eza -la --color=always --icons=always $realpath 2>/dev/null'
 command -v zoxide >/dev/null && eval "$(zoxide init zsh)"
-_src "$_zshare/zsh-autosuggestions/zsh-autosuggestions.zsh" "$HOME/.local/share/zsh-autosuggestions/zsh-autosuggestions.zsh" /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+# zsh-abbr: abbreviations expand in place on Space/Enter, so history (and atuin's
+# shared copy of it) records the real command, not `gco`. It binds Space and
+# replaces accept-line, so it loads before the two plugins below, which then wrap
+# its widgets like any other.
+_src "$HOME/.local/share/zsh-abbr/zsh-abbr.zsh"
+_src "$HOME/.local/share/zsh-autosuggestions/zsh-autosuggestions.zsh"
 # fast-syntax-highlighting MUST be sourced last.
-_src "$_zshare/zsh-fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh" "$HOME/.local/share/zsh-fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh" /usr/share/zsh-fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh
-unset _zshare
-# fzf --zsh also binds Ctrl-R, so rebind atuin after.
-command -v atuin >/dev/null && { bindkey '^r' atuin-search 2>/dev/null; bindkey -M viins '^r' atuin-search 2>/dev/null; }
+_src "$HOME/.local/share/zsh-fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh"
+
+# Shorthands below are session abbreviations when zsh-abbr loaded (its widgets only
+# exist after a successful init), plain aliases otherwise. -S keeps them out of
+# zsh-abbr's user file, so this file stays the only list. -f adds them even where a
+# command of that name exists (gs is Ghostscript), as the aliases always did; -qq
+# keeps that from printing a notice at every shell start.
+_short() {
+  if (( $+widgets[abbr-expand-and-insert] )); then
+    abbr -S -qq -f "$1"
+  else
+    alias "$1"
+  fi
+}
 
 # Tab accepts the autosuggestion if showing, else falls through to fzf-tab; bind AFTER both widgets load.
 _tab_accept_or_complete() {
@@ -225,35 +220,49 @@ command -v mise >/dev/null && eval "$(mise activate zsh)"
 if command -v kubectl >/dev/null; then
   source <(kubectl completion zsh) 2>/dev/null
   if command -v kubecolor >/dev/null; then
-    alias kubectl=kubecolor; alias k=kubecolor
+    alias kubectl=kubecolor; _short k=kubecolor
     compdef kubecolor=kubectl 2>/dev/null
   else
-    alias k=kubectl
+    _short k=kubectl
   fi
-  compdef k=kubectl 2>/dev/null
+  compdef k=kubectl 2>/dev/null   # for the alias fallback; an abbreviation has expanded before Tab
 fi
 
 command -v gh >/dev/null && alias ghd='gh dash'
 
-# gwt <branch> -> linked worktree in a sibling dir (+ cd into it)
-gwt() {
-  local top br dir
-  top=$(git rev-parse --show-toplevel 2>/dev/null) || { print -u2 "gwt: not in a git repo"; return 1; }
-  br=${1:?usage: gwt <branch>}
-  dir="${top}.${br//\//-}"
-  [[ -d "$dir" ]] && { cd "$dir"; return; }
-  if git show-ref --quiet "refs/heads/$br"; then git worktree add "$dir" "$br"
-  else git worktree add -b "$br" "$dir"; fi && cd "$dir"
-}
-gwt-rm() {  # gwt-rm <branch>: remove the worktree created by gwt
-  local main br=${1:?usage: gwt-rm <branch>}
-  main=$(git worktree list --porcelain 2>/dev/null | awk 'NR==1{print $2}')
-  [[ -n "$main" ]] && git worktree remove "${main}.${br//\//-}"
-}
+# worktrunk: git worktrees in sibling dirs (<repo>.<branch> — the layout gwt below
+# makes, so existing ones carry over). `wt switch -c <branch>`, `wt list`, `wt merge`
+# (also deletes the branch), `wt remove`. Its shell function is what lets `wt switch`
+# cd; it is eval'd here rather than added by `wt config shell install`, which would
+# edit ~/.zshrc — chezmoi owns that file. After compinit, which its completions need.
+if command -v wt >/dev/null 2>&1; then
+  eval "$(command wt config shell init zsh)"
+else
+  # Fallback where wt isn't installed. gwt <branch> -> linked worktree in a sibling dir (+ cd into it)
+  gwt() {
+    local top br dir
+    top=$(git rev-parse --show-toplevel 2>/dev/null) || { print -u2 "gwt: not in a git repo"; return 1; }
+    br=${1:?usage: gwt <branch>}
+    dir="${top}.${br//\//-}"
+    [[ -d "$dir" ]] && { cd "$dir"; return; }
+    if git show-ref --quiet "refs/heads/$br"; then git worktree add "$dir" "$br"
+    else git worktree add -b "$br" "$dir"; fi && cd "$dir"
+  }
+  gwt-rm() {  # gwt-rm <branch>: remove the worktree created by gwt
+    local main br=${1:?usage: gwt-rm <branch>}
+    main=$(git worktree list --porcelain 2>/dev/null | awk 'NR==1{print $2}')
+    [[ -n "$main" ]] && git worktree remove "${main}.${br//\//-}"
+  }
+fi
 
-command -v bat >/dev/null && export MANPAGER="sh -c 'col -bx | bat -l man -p'" MANROFFOPT='-c'
-
-alias g='git' gs='git status -sb' gd='git diff' gl='git log --oneline -20' gco='git checkout' gp='git push' gpl='git pull'
+_short g='git'
+_short gs='git status -sb'
+_short gd='git diff'
+_short gl='git log --oneline -20'
+_short gco='git checkout'
+_short gp='git push'
+_short gpl='git pull'
+unfunction _short
 alias ..='cd ..' ...='cd ../..' ....='cd ../../..'
 
 # kitten ssh pushes kitty terminfo to remotes (fixes "unknown terminal xterm-kitty"), but only in a bare
@@ -261,15 +270,4 @@ alias ..='cd ..' ...='cd ../..' ....='cd ../../..'
 # KITTY_DATA blob / leaks escape codes into other panes. KITTY_WINDOW_ID is inherited into tmux, so also guard on $TMUX.
 if command -v kitten >/dev/null 2>&1 && [[ -n "$KITTY_WINDOW_ID" && -z "$TMUX" ]]; then
   alias ssh='kitten ssh'
-fi
-
-# Opt-in tmux auto-start (off by default: start tmux manually). Enable with TMUX_AUTOSTART=1 for interactive
-# top-level shells; non-exec so a broken ~/.tmux.conf doesn't kill the login shell.
-if [[ -z "$TMUX" && -o interactive && -t 1 \
-      && "${TMUX_AUTOSTART:-0}" == "1" \
-      && "$TERM_PROGRAM" != "vscode" \
-      && -z "$VSCODE_INJECTION$REMOTE_CONTAINERS$CODESPACES$CI$TERMINAL_EMULATOR" \
-      && ! -e /.dockerenv && ! -e /run/.containerenv ]] \
-   && command -v tmux >/dev/null; then
-  tmux new-session -A -s main
 fi
