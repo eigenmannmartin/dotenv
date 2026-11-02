@@ -10,5 +10,4 @@
 # from; first run is interactive (open the app once for CLI symlinks).
 cask "orbstack"
 brew "lazydocker"   # TUI dashboard for Docker (containers, images, logs)
-brew "ctop"         # top-like live CPU/mem/net per container
 brew "dive"         # inspect a Docker image layer by layer

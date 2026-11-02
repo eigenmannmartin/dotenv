@@ -2,7 +2,7 @@
 # dotenv bootstrap: installs chezmoi if needed and applies this repo. Safe to re-run; entrypoint for VS Code/Codespaces dotfiles install.
 #
 # Pick what gets installed with DOTENV_FEATURES (default: core = shell only):
-#   DOTENV_FEATURES=core,devlite ./install.sh  # + neovim/lazygit/node/devcontainer
+#   DOTENV_FEATURES=core,devlite ./install.sh  # + neovim/lazygit/worktrunk/node
 #   DOTENV_FEATURES=core,dev ./install.sh      # + the container layer (OrbStack on macOS)
 #   DOTENV_FEATURES=core,dev,k8s,vpn ./install.sh
 # The choice is frozen into ~/.config/chezmoi/chezmoi.toml by home/.chezmoi.toml.tmpl,
@@ -41,6 +41,6 @@ else
 fi
 
 echo "dotenv: applied. Dependencies are installed automatically by chezmoi"
-echo "  (Homebrew on macOS; apt + official installers on Debian/Ubuntu)."
+echo "  (Homebrew on macOS; apt + upstream release binaries on Debian/Ubuntu)."
 echo "Re-apply later with just: chezmoi apply"
 echo "Open a fresh kitty/tmux/zsh session to see the changes."

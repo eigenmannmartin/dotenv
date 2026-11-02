@@ -8,16 +8,6 @@
      all chezmoi commands, and a missing key aborts the whole apply. `features` is
      seeded in .chezmoidata.toml precisely so it is always defined. */}}
 
-{{/* kitty is a desktop GUI terminal: apply on macOS/Linux desktops, but skip where
-     there is no display to run it on. "Container" was too narrow a test — a Lima /
-     cloud VM is not a container, so it was getting a kitty config it can never use.
-     The real question is "is there a GUI here", so also skip on Linux with no
-     DISPLAY/WAYLAND_DISPLAY. (macOS always has a GUI, hence the os check.) */}}
-{{ if or (stat "/.dockerenv") (stat "/run/.containerenv") (env "REMOTE_CONTAINERS") (env "CODESPACES")
-         (and (eq .chezmoi.os "linux") (not (env "DISPLAY")) (not (env "WAYLAND_DISPLAY"))) }}
-.config/kitty
-{{ end }}
-
 {{/* Feature-gated payloads. The nvim config is the big one: LazyVim bootstraps
      dozens of plugins on first launch, which is pure cost on a VM you never edit in. */}}
 {{/* These belong to the editor/toolchain half, so they follow "devlite" — and "dev"
@@ -27,14 +17,9 @@
 .config/gh-dash
 .config/direnv
 .config/lazygit
-{{/* dx shells into a repo's devcontainer via the devcontainer CLI, which only the
-     devlite/dev features install — shipping it to a core box gives a command that can
-     only ever print "devcontainer CLI missing". */}}
-.local/bin/dx
 {{ end }}
 
 {{ if not (has "k8s" .features) }}
-.config/k9s
 .config/sofka
 {{ end }}
 
@@ -42,9 +27,12 @@
 .local/bin/cisco-vpn
 {{ end }}
 
-{{/* Lima lives on the host that runs the VMs — which is the Mac. Shipping VM
-     templates and the `vm` wrapper into a guest would just be confusing. */}}
+{{/* Host-only: the Mac is the machine you sit at. kitty is its GUI terminal — a
+     Linux VM or container only ever needs kitty's terminfo (25-terminfo), never its
+     config. Lima lives on the host that runs the VMs, so shipping VM templates and
+     the `vm` wrapper into a guest would just be confusing. */}}
 {{ if ne .chezmoi.os "darwin" }}
+.config/kitty
 .lima
 .local/bin/vm
 {{ end }}

@@ -23,42 +23,32 @@ sourceDir = {{ .chezmoi.sourceDir | dir | quote }}
 
 [data]
 {{/*
-  Precedence: DOTENV_FEATURES > this machine's stored choice > legacy > "core".
+  Precedence: DOTENV_FEATURES > this machine's stored choice > "core".
 
-  "legacy" is the upgrade path and it matters: machines bootstrapped before
-  features existed have a config with sourceDir and no [data] at all. Without this
-  branch they would silently downgrade to core — losing nvim/k9s/cisco-vpn config
-  updates and Brewfile.dev/Brewfile.k8s — and because chezmoi then prints "config
-  file template has changed, run chezmoi init", following that advice would FREEZE
-  core in place. Detect them by "config exists but has no features key" and give
-  them everything, matching what they had before. .chezmoidata.toml carries the
-  same full list for the same reason (it is only consulted when the machine config
-  has no [data], i.e. only by exactly these machines) — that covers the
-  `chezmoi update` path, which never re-runs init and so never reaches this file.
+  The literal "core" default is deliberate: .chezmoidata.toml is NOT loaded while
+  this template renders (verified — referencing .features here aborts init with
+  `map has no entry`), even though it IS available to every other template on apply.
 
-  The literal "core" default for genuinely fresh machines is deliberate:
-  .chezmoidata.toml is NOT loaded while this template renders (verified —
-  referencing .features here aborts init with `map has no entry`), even though it
-  IS available to every other template on apply.
+  A config that exists but has no features key predates features (it held only a
+  sourceDir). There is no legacy fallback for it any more: it is frozen at core like
+  a fresh machine, so say so on stderr instead of letting it shrink silently. Any
+  change to this file makes chezmoi print "config file template has changed, run
+  chezmoi init" on the next apply, so such a machine reaches this warning on its own.
+  (warnf needs chezmoi >= 2.59, Jan 2025. An older chezmoi cannot parse this file at
+  all, so init fails on every machine; fix with `brew upgrade chezmoi` or `chezmoi
+  upgrade`. install.sh and the Brewfile only ever install a missing chezmoi, never
+  upgrade one.)
 
   Deliberately no prompt: init has to work unattended in a Lima provisioning
   script. (Also, `(env "X") | default (promptOnce ...)` is a trap — Go templates
   evaluate the argument eagerly, so it prompts even when the env var IS set.)
 */ -}}
-{{/*
-  $known is the validation set; $legacy is what a pre-features machine used to have.
-  They are separate on purpose — folding a NEW feature into the legacy default would
-  silently install it on every old machine on the next `chezmoi update`.
-*/ -}}
-{{/*  "devlite" is a strict subset of "dev", so it is deliberately NOT in $legacy: an
-      old machine listing "dev" already gets everything devlite installs. */ -}}
 {{- $known := list "core" "devlite" "dev" "k8s" "vpn" "ai" "docker" "flutter" -}}
-{{- $legacy := list "core" "dev" "k8s" "vpn" -}}
 {{- $features := list "core" -}}
-{{- if and (stat .chezmoi.configFile) (not (hasKey . "features")) -}}
-{{-   $features = $legacy -}}
-{{- else if hasKey . "features" -}}
+{{- if hasKey . "features" -}}
 {{-   $features = .features -}}
+{{- else if and (stat .chezmoi.configFile) (not (env "DOTENV_FEATURES")) -}}
+{{-   warnf "%s has no [data] features key, so this machine is now frozen at features = [\"core\"]. To keep more, re-run install.sh with e.g. DOTENV_FEATURES=core,dev,k8s,vpn" .chezmoi.configFile -}}
 {{- end -}}
 {{- if env "DOTENV_FEATURES" -}}
 {{-   $parsed := list -}}
