@@ -9,9 +9,10 @@
 #
 #   dotenv-persist              link everything (idempotent; safe to re-run)
 #   dotenv-persist status       show what is shared, local, or not yet created
-#   dotenv-persist add PATH     also share $HOME/PATH from now on
-#   dotenv-persist unshare PATH stop sharing it and put the real file back
-#   dotenv-persist project DIR  share a dir from the CURRENT REPO (e.g. .backlog)
+#
+# What gets shared is the DEFAULT_PATHS list in this script (`status` prints it). To
+# share another file, add it there in the dotfiles repo
+# (home/dot_local/bin/executable_dotenv-persist); every VM picks it up on its next apply.
 #
 # Re-running it re-captures anything that came unlinked: several of these tools write
 # a credential by rename(), which replaces our symlink with a real file, so the token
@@ -28,7 +29,6 @@ set -euo pipefail
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dotenv"
 DIR_FILE="$CONFIG_DIR/persist-dir"
-LIST_FILE="$CONFIG_DIR/persist-paths"
 
 die() { echo "dotenv-persist: $*" >&2; exit 1; }
 
@@ -50,11 +50,6 @@ die() { echo "dotenv-persist: $*" >&2; exit 1; }
 #   .claude.json               account, onboarding state, and the per-project MRU list
 #                              /resume is built from — useless without the transcripts
 #   .claude/projects/          the transcripts themselves, one .jsonl per session
-# The two runai entries are what makes the CLI installable at all on a fresh VM:
-# every Run:ai control-plane download endpoint sits behind SSO, and the install
-# script (20-install-packages, k8s feature) bootstraps the binary with the bearer
-# token from authentication.json — which the CLI refreshes whenever it is used on
-# any box sharing this store. config.json carries the control-plane URL + cluster.
 DEFAULT_PATHS='
 .local/share/atuin/key
 .local/share/atuin/session
@@ -64,16 +59,13 @@ DEFAULT_PATHS='
 .claude.json
 .claude/projects/
 .config/dotenv/op-service-account-token
-.runai/authentication.json
-.runai/config.json
 .config/argocd/config
 '
 
 # One cleaned entry per line — comments, whitespace and blanks already gone, so the
 # consumers below can just read lines.
 paths() {
-  { if [ -r "$LIST_FILE" ]; then cat "$LIST_FILE"; else printf '%s' "$DEFAULT_PATHS"; fi; } \
-    | sed 's/#.*//' | tr -d '[:blank:]' | grep -v '^$' || true
+  printf '%s' "$DEFAULT_PATHS" | sed 's/#.*//' | tr -d '[:blank:]' | grep -v '^$' || true
 }
 
 persist_dir() {
@@ -129,33 +121,33 @@ link_one() {
 }
 
 # Before the store check below, which otherwise swallows --help on any machine that
-# has no shared store — i.e. every Mac and devcontainer.
+# has no shared store — i.e. every Mac and container.
 case "${1:-}" in
-  -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 
 PERSIST=""
 if ! PERSIST="$(persist_dir)"; then
   case "${1:-link}" in
     status) echo "not shared — no $DIR_FILE (VM created with --no-persist?)"; exit 0 ;;
-    *)      exit 0 ;;   # a plain Mac / devcontainer: nothing to do, not an error
+    *)      exit 0 ;;   # a plain Mac / container: nothing to do, not an error
   esac
 fi
 [ -d "$PERSIST" ] || die "persist dir '$PERSIST' is not mounted — is the VM's mount up?"
 
 case "${1:-link}" in
   link)
-    # ~/.zshrc re-links on every shell start, so several runs can now overlap — tmux
-    # restoring a session opens its panes at once. Two of them racing over the same
-    # mv pair could drop a credential, and a duplicate run has nothing to add anyway,
-    # so losing the race exits quietly. The staleness reap is what keeps a run killed
-    # mid-flight from disabling re-linking on this box forever.
-    LOCK="$CONFIG_DIR/.persist-lock"
-    if [ -d "$LOCK" ] && [ -z "$(find "$LOCK" -maxdepth 0 -mmin -1 2>/dev/null)" ]; then
-      rmdir "$LOCK" 2>/dev/null || true
-    fi
-    mkdir "$LOCK" 2>/dev/null || exit 0
-    trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+    # ~/.zshrc re-links on every shell start, so several runs can overlap when shells
+    # start together (several kitty tabs or tmux panes at once, `secrets login` while
+    # a shell starts). Two of them racing over the same mv pair could drop a
+    # credential, and a duplicate run has nothing to add anyway,
+    # so losing the race exits quietly. The kernel drops a flock when its holder dies,
+    # so a run killed mid-flight cannot leave a stale lock behind. Only a VM with a
+    # store gets this far, and flock (util-linux) is in every Ubuntu/Debian base.
+    # .persist.lock, not the old .persist-lock: that was a DIRECTORY, and one left
+    # behind on a VM would make this redirect fail.
+    exec 9>"$CONFIG_DIR/.persist.lock"
+    flock -n 9 || exit 0
 
     echo "==> dotenv-persist: sharing logins via $PERSIST"
     while IFS= read -r rel; do
@@ -182,74 +174,5 @@ $(paths)
 EOF
     ;;
 
-  add)
-    rel="${2:?usage: dotenv-persist add <path relative to \$HOME>}"
-    safe_rel "${rel%/}" || die "'$rel' must be relative to \$HOME and must not contain '..'"
-    if [ ! -r "$LIST_FILE" ]; then
-      # Materialise the defaults first. NOT `paths > "$LIST_FILE"`: the redirect
-      # creates the file before paths() runs, so paths() would read it back empty
-      # and the defaults would be silently dropped.
-      defaults="$(paths)"
-      { echo "# Files shared between VMs by dotenv-persist, relative to \$HOME."
-        echo "# A trailing / means link the whole directory."
-        printf '%s\n' "$defaults"; } > "$LIST_FILE"
-    fi
-    grep -qxF "$rel" "$LIST_FILE" || printf '%s\n' "$rel" >> "$LIST_FILE"
-    link_one "$rel"
-    echo "==> added $rel to $LIST_FILE"
-    ;;
-
-  project)
-    # Per-PROJECT state, as opposed to the $HOME-relative credentials above: move a
-    # directory out of the repo into the shared store and symlink it back. Written for
-    # Backlog.md's task folder — the board should outlive `vm rm` without being
-    # committed — but nothing here is specific to it.
-    #
-    # Only needed when the repo lives INSIDE the VM. A repo on a `vm --mount` is
-    # already on the Mac's disk and survives a rebuild on its own.
-    rel="${2:?usage: dotenv-persist project <dir relative to the repo root>}"; rel="${rel%/}"
-    safe_rel "$rel" || die "'$rel' must be inside the repo and must not contain '..'"
-    root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    src="$root/$rel"
-    dst="$PERSIST/projects/$(basename "$root")/$rel"
-    if [ -L "$src" ]; then
-      echo "==> $rel is already shared (-> $(readlink "$src"))"; exit 0
-    fi
-    [ -e "$src" ] || die "no $rel in $root"
-    [ -e "$dst" ] && die "$dst already exists — move or remove it first"
-    mkdir -p "$(dirname "$dst")"
-    mv "$src" "$dst"
-    ln -s "$dst" "$src"
-    echo "==> $rel now lives in $dst"
-    echo "    it survives 'vm rm', and every VM on this store sees the same content"
-    echo "    remember to gitignore $rel if it should stay out of the repo"
-    ;;
-
-  unshare)
-    # For paths a tool turns out to reject as a symlink (see ~/.config/op above), and
-    # for anything you would rather keep VM-local. The shared copy is moved back into
-    # $HOME so nothing is lost; other VMs stop seeing updates to it.
-    rel="${2:?usage: dotenv-persist unshare <path relative to \$HOME>}"; rel="${rel%/}"
-    safe_rel "$rel" || die "'$rel' must be relative to \$HOME and must not contain '..'"
-    src="$HOME/$rel"; dst="$PERSIST/$rel"
-    [ -L "$src" ] || die "$rel is not a shared symlink"
-    rm -f "$src"
-    if [ -e "$dst" ]; then
-      mkdir -p "$(dirname "$src")"
-      mv "$dst" "$src"
-      echo "==> moved $rel out of the shared store and back into \$HOME"
-    else
-      echo "==> removed the $rel link (the shared store had nothing behind it)"
-    fi
-    # Only touch the list if it exists; otherwise the defaults still apply and the
-    # entry may simply no longer be one of them.
-    if [ -r "$LIST_FILE" ]; then
-      # || true: grep exits 1 when it selects nothing, which would leave the tmp file
-      # behind and skip the mv.
-      { grep -vxF "$rel" "$LIST_FILE" || true; } > "$LIST_FILE.tmp"
-      mv "$LIST_FILE.tmp" "$LIST_FILE"
-    fi
-    ;;
-
-  *) die "unknown command '$1' (link|status|add|unshare|project)" ;;
+  *) die "unknown command '$1' (link|status)" ;;
 esac
