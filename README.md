@@ -1,16 +1,22 @@
 # dotenv
 
-Personal, portable, devcontainer-aware dotfiles, managed with
-[chezmoi](https://www.chezmoi.io/). (The name predates the `.env`/dotenv
+Personal, portable dotfiles for the Mac, the Lima VMs it runs, and any container,
+managed with [chezmoi](https://www.chezmoi.io/). (The name predates the `.env`/dotenv
 tooling collision — this is a *dotfiles* repo, not env-var loading.)
+
+This page is the overview. The details live next to the code: the commands answer
+`--help` (`tmux-sessionizer` and `ssh-launch` explain themselves in their headers), and
+every script and config file explains itself in its header.
 
 ## Bootstrap
 
-A new machine (or a container with `git`):
+A new machine or container that has `git` (the plugin externals below need it even
+when chezmoi could clone without it):
 
 ```sh
 sh -c "$(curl -fsLS https://get.chezmoi.io)" -- -b "$HOME/.local/bin" \
   init --apply https://github.com/eigenmannmartin/dotenv.git
+./install.sh      # …or this, from a local clone
 ```
 
 Two details that matter on a *fresh* box: `-b ~/.local/bin` puts chezmoi somewhere
@@ -19,16 +25,16 @@ bare `chezmoi apply` would be "command not found" on Linux, where nothing else
 installs chezmoi), and the **https** remote works before any SSH key exists — switch
 the remote to SSH afterwards if you want to push.
 
-…or from a local clone:
-
-```sh
-./install.sh
-```
-
 chezmoi reads [`.chezmoiroot`](.chezmoiroot) and treats [`home/`](home) as the
 source state (`dot_zshrc` → `~/.zshrc`, etc.). Repo-meta files at the root
-(`README.md`, `install.sh`, `.devcontainer/`, `git/`) are *not* applied to
-`$HOME`.
+(`README.md`, `install.sh`, the Brewfiles, `browser-extension/`) are *not* applied
+to `$HOME`.
+
+**Inside any container**, VS Code can bootstrap them: set
+`"dotfiles.repository": "eigenmannmartin/dotenv"` (+ `"dotfiles.installCommand": "install.sh"`)
+in your VS Code settings. Host-only bits skip themselves and every tool hook is
+`command -v`-guarded, so a barebones image no-ops cleanly. That path gets the plain
+`core` default; set `DOTENV_FEATURES` in the container's environment for more.
 
 ## Feature profiles
 
@@ -37,649 +43,249 @@ split into groups. `core` alone — the default — is just the shell:
 
 ```sh
 ./install.sh                                  # core: zsh, tmux, prompt, atuin, fzf…
-DOTENV_FEATURES=core,devlite ./install.sh     # + neovim/LazyVim, lazygit, node, jq
+DOTENV_FEATURES=core,devlite ./install.sh     # + neovim/LazyVim, lazygit, wt, node
 DOTENV_FEATURES=core,dev ./install.sh         # + containers (OrbStack on macOS)
 DOTENV_FEATURES=core,dev,k8s,vpn ./install.sh # the full workstation (ai/docker/flutter: opt in)
 ```
 
+The package list ([Dependencies & platforms](#dependencies--platforms) says where each comes from):
+
 | Feature | Adds |
 |---|---|
-| `core` | zsh + plugins, tmux + tpm, terminfo, oh-my-posh, atuin, fzf/ripgrep/bat/eza/zoxide/delta/fd |
-| `devlite` | neovim + LazyVim config, lazygit, node, jq, direnv, btop, gh + gh-dash, pre-commit, devcontainer CLI + `dx`, git-lfs, pnpm, prettier (macOS also yq, mise, git-absorb, dust/duf/procs) |
-| `dev` | **`devlite` + the container layer**: OrbStack (macOS only) and lazydocker/dive (+ ctop on macOS) |
-| `k8s` | k9s + its config, [sofka](https://github.com/nklmilojevic/sofka), helm, helmfmt, argocd; on Linux also kubectl, amtui and a `runai` bootstrap (macOS also kubectx/stern/kubecolor) |
-| `vpn` | openconnect + openconnect-saml → the [`cisco-vpn`](#cisco-vpn-entra-id-sso-from-the-lima-vm) command |
-| `ai` | Claude Code + Codex CLIs (`claude`, `codex`) + [Backlog.md](#backlogmd-boards) (`backlog`), via npm — needs node, so pair it with `devlite` (`DOTENV_FEATURES=core,devlite,ai`; `vm --profile ai` adds it for you) |
-| `docker` | docker engine + compose, so [devcontainers](#dev-containers) run in the VM itself |
-| `flutter` | fvm + CocoaPods for Flutter/iOS work — macOS only; the Flutter SDK itself is per-project (`fvm install` reads `.fvmrc`), Xcode from the App Store |
+| `core` | zsh + fzf-tab, zsh-autosuggestions, fast-syntax-highlighting, zsh-abbr; tmux + catppuccin, extrakto; oh-my-posh, atuin, fzf, ripgrep, bat, eza, zoxide, delta, fd. Linux also: kitty-terminfo + ncurses-term (kitty-terminfo is retried on every apply; where apt can't install it, e.g. without sudo, the shell falls back to `TERM=xterm-256color`). macOS also: chezmoi, kitty + FiraCode Nerd Font, lima |
+| `devlite` | neovim + LazyVim config, lazygit, [worktrunk](https://github.com/max-sixty/worktrunk) (`wt`), node + pnpm + prettier, jq, yq, gh + gh-dash, direnv, btop, pre-commit, git-lfs. Linux also: python3, pipx, build-essential (a C compiler for treesitter). macOS also: mise, git-absorb, dust/duf/procs |
+| `dev` | **`devlite` + the container layer**: OrbStack (macOS only), lazydocker, dive |
+| `k8s` | [sofka](https://github.com/nklmilojevic/sofka) + its config, helm, helmfmt, argocd. macOS also: kubecolor, kubectx/kubens, stern. Linux also: kubectl (macOS gets it from OrbStack, so pair `k8s` with `dev` on a Mac) |
+| `vpn` | Linux only: openconnect, vpnc-scripts, openconnect-saml, dig → the [`cisco-vpn`](#cisco-vpn-entra-id-sso-from-the-lima-vm) command |
+| `ai` | Claude Code + Codex CLIs (`claude`, `codex`) + [Backlog.md](#backlogmd-boards) (`backlog`), via npm — needs node, so pair it with `devlite` (`DOTENV_FEATURES=core,devlite,ai`; `vm new <name> --profile ai` adds it for you) |
+| `docker` | Linux only: a docker engine inside the Linux VM (apt `docker.io` + compose v2; you join the `docker` group) |
+| `flutter` | macOS only: fvm + CocoaPods for Flutter/iOS work; the Flutter SDK itself is per-project (`fvm install` reads `.fvmrc`), Xcode from the App Store |
 
-`dev` is `devlite` plus everything container-shaped, split out because that half is the
-expensive one — OrbStack is a ~1 GB cask with a VM behind it, and a box you only edit
-code on never needs it. **OrbStack is macOS-only**: on Linux `dev` installs just the
-clients (lazydocker, dive), and the engine they talk to comes from `docker` (apt
-`docker.io`) or a remote `DOCKER_HOST`. Asking for `dev` always brings `devlite` with
-it, so `core,dev` and `core,devlite,dev` are the same machine.
+`dev` is split from `devlite` because the container half is the expensive one —
+OrbStack is a ~1 GB cask with a VM behind it. On Linux `dev` installs just the clients;
+the engine comes from `docker` or a remote `DOCKER_HOST`. `dev` always brings `devlite`,
+so `core,dev` and `core,devlite,dev` are the same machine.
 
 The choice is frozen into `~/.config/chezmoi/chezmoi.toml` by
 [`home/.chezmoi.toml.tmpl`](home/.chezmoi.toml.tmpl), so later bare `chezmoi apply`
 runs keep it; re-run `install.sh` with a new `DOTENV_FEATURES` to change it. An
-unknown feature name aborts `init` rather than quietly installing less than asked.
-Machines that predate this split (config with a `sourceDir` and no `[data]`) keep
-getting **everything**, so upgrading can't silently strip a working workstation —
-run `DOTENV_FEATURES=core,devlite ./install.sh` there once to opt into a smaller set. Gating
-happens in two places: [`.chezmoiignore`](home/.chezmoiignore) keeps unused *configs*
-from deploying at all (a core-only box never gets `~/.config/nvim`, so LazyVim never
-bootstraps), and the
-[package script](home/.chezmoiscripts/run_onchange_after_20-install-packages.sh.tmpl)
-skips the matching installs. On macOS the same split applies via
-[`Brewfile`](Brewfile) + [`Brewfile.devlite`](Brewfile.devlite) +
-[`Brewfile.dev`](Brewfile.dev) + [`Brewfile.k8s`](Brewfile.k8s) +
-[`Brewfile.flutter`](Brewfile.flutter); the per-feature files
-are additive, so `Brewfile.dev` holds only what `dev` adds on top of `devlite`.
+unknown feature name aborts `init` rather than quietly installing less than asked. A
+config written before features existed (no `features` key) is treated as `core`, and
+`chezmoi init` warns about it — re-run `install.sh` with the set you want.
 
-## Lima VMs
-
-[`vm`](home/dot_local/bin/executable_vm) builds purpose-specific Lima VMs on the
-Mac, each bootstrapping this repo with the right feature set (Lima itself comes from
-the core [`Brewfile`](Brewfile)):
-
-```sh
-vm new scratch                          # core only — fastest build
-vm new work --profile devlite           # neovim/node/lazygit, no container layer
-vm new hsg  --profile vpn               # the one that needs corporate VPN access
-vm new lab  --profile k8s --profile vpn # profiles COMBINE (same as --profile k8s,vpn)
-vm new big  --profile full --cpus 8 --memory 16 --disk 120
-vm new box  --profile ai                # + claude code & codex CLIs (implies devlite)
-vm new box  --profile docker            # + a docker engine, for devcontainers in the VM
-vm resize work --cpus 8 --memory 16     # change an existing VM (disk can only grow)
-vm ls | vm shell <name> | vm ssh <name> | vm stop <name> | vm rm <name>
-```
-
-`vm resize` stops the instance if it is running, edits its config, and starts it again
-— Lima only lets cpus/memory/disk change while the VM is down, and it has no way to
-*shrink* a disk, so asking for less than it has is an error.
-
-`--profile` and `--features` may each be repeated and/or comma-separated; everything
-unions together, de-duplicates, and is emitted in a fixed order, so `k8s vpn` and
-`vpn k8s` build the identical VM. An unknown profile or feature aborts before any VM
-is created.
-
-It drives [`~/.lima/_templates/dotenv.yaml`](home/dot_lima/_templates/dotenv.yaml)
-(`$LIMA_HOME/_templates` is searched first, so it resolves as `template://dotenv`),
-passing the profile as a Lima `param`. The VM clones this repo on first boot and
-runs `install.sh` with the matching `DOTENV_FEATURES`. A readiness probe is what
-makes a failed bootstrap actually fail `vm new` — a failing Lima provision script
-otherwise only logs a warning and leaves you with a half-built VM.
-
-### Mounts — your home directory is not shared
-
-```sh
-vm new work --mount ~/code --mount ~/notes:ro   # writable unless you say :ro
-vm new work --no-mounts                         # not even the defaults
-printf '~/code\n~/notes:ro\n' > ~/.config/dotenv/vm-mounts   # the ones you always want
-```
-
-The template bases on `template://_images/ubuntu`, **not** `template://ubuntu` —
-the latter pulls in `_default/mounts`, which shares all of `~`. That is the only way
-to opt out: a child template cannot unset an inherited mount (`mounts: []` merges to
-no effect), and `limactl --mount-none` is rejected when combined with `--mount`, so
-it cannot be undone from the CLI either.
-
-Two consequences worth knowing: `limactl shell` can no longer land you in the host
-cwd unless that directory happens to be mounted (it warns and drops you in `$HOME`),
-and **existing VMs keep the mounts they were created with** — only new ones are
-affected.
-
-### Browse through a VM's VPN
-
-```sh
-vm proxy hsg          # SOCKS5 on 127.0.0.1:1080, in the background
-vm proxy lab 9090     # a second one, different port
-vm proxy status       # which are up, on which ports
-vm proxy stop [name]  # stop one, or all of them
-vm proxy ensure hsg   # (re)start only if it's gone — safe to run any time
-vm proxy hsg --foreground
-```
-
-An SSH dynamic forward into the VM. With SOCKS5 the browser hands over the *hostname*
-rather than an address, so DNS resolves inside the VM too — which is what makes
-split-horizon intranet names work while the rest of the Mac stays off the VPN.
-
-Backgrounding uses ssh's own **ControlMaster** rather than a pid file: `-M` leaves a
-control socket in `~/.local/state/dotenv/`, and `-O check` / `-O exit` then query and
-stop that exact connection. Nothing to go stale, and no chance of signalling an
-unrelated ssh. `status` cleans up sockets whose ssh has died (the file outlives it).
-
-**When intranet pages stop loading**, one of two links is down, and each now looks
-after itself. A Mac sleep tends to leave the ssh master *wedged* — socket present,
-nothing flowing — so the proxy runs with `ServerAliveInterval=15` /
-`ServerAliveCountMax=4`: a wedged master turns into a dead one within a minute, and
-`vm proxy ensure hsg` (idempotent, reuses the previous port) puts it back. If the
-proxy is up but VPN targets are still unreachable, the tunnel *inside* the VM is
-what's wedged — the VM-side watchdog heals that on its own within a couple of
-minutes (see [running it as a service](#running-it-as-a-service)), or immediately
-with `vm shell hsg cisco-vpn heal`.
-
-## Logins that survive a rebuild
-
-`vm new` mounts one small host directory (default `~/.local/share/dotenv/vm-logins`,
-`--persist` / `--no-persist`) and
-[`dotenv-persist`](home/dot_local/bin/executable_dotenv-persist) symlinks the
-credential files into it. Log in once, on any VM; every VM after that starts logged
-in.
-
-```sh
-dotenv-persist            # link everything (runs automatically on every chezmoi apply)
-dotenv-persist status     # shared / local / not created yet
-dotenv-persist add .aws/credentials
-dotenv-persist unshare .config/op   # reverse it; the real file goes back to $HOME
-```
-
-Shared by default: atuin's `key` + `session`, `gh/hosts.yml`, your git identity
-(`~/.config/git/identity` — see below), the 1Password service-account token, the
-Run:ai login (`.runai/authentication.json` + `config.json`, which is also what lets the
-`k8s` install bootstrap `runai` on a fresh VM), argocd's `.config/argocd/config`, and three
-files for Claude Code —
-`.claude/.credentials.json` (the OAuth tokens), `.claude.json` (account, onboarding
-state, and the per-project list `/resume` is built from) and `.claude/projects/` (the
-session transcripts). All three, because with only the credentials shared a new VM
-came up logged in but re-ran onboarding with an empty `/resume`, which is
-indistinguishable from having lost the login.
-
-Deliberately **not** shared, and worth knowing why:
-
-- atuin's `history.db` — SQLite over a virtiofs/sshfs mount risks corruption, and it
-  doesn't need sharing, since the key and session are what let `atuin sync` pull the
-  same history into every VM.
-- `~/.config/op` — the 1Password CLI **refuses to run** when its config directory is
-  a symlink, and it has a `--config` flag but no environment variable, so there is no
-  way to redirect it for every invocation. It also buys nothing: with a service
-  account the token *is* the credential, and `secrets` reads that file itself.
-
-That second one generalises — share credential **files**, not config **directories**,
-and check that the tool tolerates a symlink before adding one.
-
-**git identity.** A fresh VM used to fail its first commit with *"Author identity
-unknown"*, and a `git config --global user.email` set to fix it lasted exactly until
-the next `vm rm`. So `vm new` copies the host's `user.name`/`user.email` into
-`~/.config/git/identity` in the store (once — after that the file is yours), the
-installer adds an `include.path` for it to `~/.gitconfig`, and dotenv-persist links it
-into every VM. Included rather than copied, so editing that one file changes every box.
-Only the identity, not the whole `~/.gitconfig`: that file points commit signing at
-`/Applications/1Password.app`, which does not exist in a Linux guest.
-
-`~/.zshrc` re-runs it (quietly, in the background) on every shell start, and you can
-re-run it by hand any time. That matters because atuin, `gh` and `claude` all replace
-a credential by `rename()`, which swaps out the symlink for a real file — after which
-the token they just refreshed lives in this VM alone and `vm rm` takes it with it.
-Re-running re-captures whatever came unlinked — newer file wins, and the one that
-loses is kept as `.dotenv-bak` rather than deleted. Waiting to be told to re-run was
-never going to work: `claude` rotates its OAuth token mid-session, hours after any
-login, without saying so.
+Gating happens in two places: [`.chezmoiignore`](home/.chezmoiignore) keeps unused
+*configs* from deploying at all (a core-only box never gets `~/.config/nvim`, so
+LazyVim never bootstraps), and the package step skips the matching installs. Turning a
+feature off leaves its configs behind: chezmoi forgets them, it does not delete them.
 
 ## What's managed today
 
 | Target | Notes |
 |---|---|
-| `~/.zshrc` | 1Password SSH-agent wiring (guarded), **opt-in tmux auto-start** (`TMUX_AUTOSTART=1`; off by default, skipped in tmux/VS Code/devcontainers/CI), **modern CLI aliases** (eza/bat) + plugins (autosuggestions, fast-syntax-highlighting, zoxide, fzf-tab), **Esc-Esc → sudo** |
-| `~/.zshenv` | `PATH` for **non-interactive** shells — read by every zsh, so `ssh vm claude` finds `~/.local/bin` |
-| `~/.zprofile` | guarded Homebrew + rbenv init, + the same PATH for login shells |
-| `~/.tmux.conf` | `C-a` prefix, vim nav, **Catppuccin v2** block status line (host·ip·session), **popups** (M-f sessionizer, prefix+g lazygit, prefix+Tab extrakto), resurrect/continuum (periodic save, manual restore via `prefix+C-r`, no auto-restore), **nested-session F12 toggle + remote tint** |
-| `~/.config/kitty/kitty.conf` | **opaque** (`background_opacity 1.0`), default font (Menlo) with FiraCode Nerd Font as the icon-glyph fallback, `macos_option_as_alt right` (left Option types `@{}[]`), square tabs, no cursor-trail — **host-only** |
-| `~/.config/kitty/current-theme.conf` | Catppuccin-Macchiato palette (generated by `kitten themes`) — **host-only** |
+| `~/.zshrc` | prompt + [project badge](#per-project-prompt-badge), 1Password SSH-agent wiring (guarded), eza/bat aliases, zsh plugins + **abbreviations**, fzf/atuin/zoxide/direnv/mise hooks, `wt` shell integration, **Esc-Esc → sudo** |
+| `~/.zshenv`, `~/.zprofile` | `PATH` for **non-interactive** shells (`~/.local/bin`, Linux sbin, `/opt/homebrew/bin`) + `DEVELOPER_DIR` — read by every zsh, so `ssh vm claude` finds `~/.local/bin`; guarded Homebrew, rbenv and OrbStack init for login shells |
+| `~/.tmux.conf` | `C-a` prefix, vim nav, **Catppuccin v2** block status line (host·ip·session), **popups**, mouse/OSC 52 copy, remote-host tint ([keys](#tmux)) |
+| `~/.local/share/{fzf-tab,zsh-*}`, `~/.tmux/plugins/{catppuccin,extrakto}` | third-party plugins, cloned by chezmoi from [`.chezmoiexternal.toml`](home/.chezmoiexternal.toml) on every OS (git checkouts refreshed weekly, catppuccin pinned to a release) — no tpm, no plugin manager at runtime |
+| `~/.config/kitty/` | default font (Menlo) with FiraCode Nerd Font as the icon-glyph fallback, `macos_option_as_alt right` (left Option types `@{}[]`), `#121212` background, copy-on-select, Catppuccin-Macchiato theme (generated by `kitten themes`) — **macOS only** |
 | `~/.config/oh-my-posh/config.omp.json` | Catppuccin prompt: per-project **color bar**, **git status**, **transient** + **right-prompt**, **kube-context guard** |
-| `~/.config/nvim` | **LazyVim** + Catppuccin Macchiato + **lang extras** (Go/Py/Docker/k8s/Helm/Dart + DAP); `lazy-lock` pinned |
-| `~/.config/atuin/config.toml` | atuin shell history — **synced to the home-network server** (set `sync_address`) |
-| `~/.config/{k9s,sofka,lazygit,gh-dash,direnv}` | k9s (blue skin + full logs), sofka (Macchiato skin), lazygit & gh-dash themes, direnv `use_op` secrets helper |
+| `~/.config/nvim` | [**LazyVim**](#neovim-lazyvim) + Catppuccin Macchiato + **lang extras**; `lazy-lock` pinned |
+| `~/.config/{atuin,sofka,lazygit,gh-dash,direnv}` | atuin **synced to the home-network server** (`sync_address`), sofka (Catppuccin Macchiato skin), lazygit & gh-dash themes, direnv `use_op` secrets helper |
 | `~/.config/git/ignore` | global gitignore (git reads it with no config) — currently `.backlog/` |
 | `~/.config/dotenv/secrets.env` | `op://` references for [`secrets`](#secrets-into-env-vars-and-logins) — **created once, never overwritten** |
-| `~/.local/bin/{secrets,dotenv-persist}` | 1Password → env/logins, and logins shared across VM rebuilds |
-| `~/.lima/_templates/dotenv.yaml` + `~/.local/bin/vm` | [Lima VMs](#lima-vms) — **host-only** |
+| `~/.local/bin/*` | the [commands](#commands) |
+| `~/.lima/_templates/dotenv.yaml` + `~/.local/bin/vm` | [Lima VMs](#lima-vms) — **macOS only** |
 
-## Per-project prompt badge
+## Cheat-sheets
 
-Folders under `~/code` get a colored badge at the start of the prompt so you
-always know which project you're in (e.g. `hsg` = green, `bechterew` = blue).
-Colors are pinned in `~/.zshrc` via `DOTENV_PROJECT_COLOR_MAP`; any other project
-gets a stable auto-assigned color from the Catppuccin palette. A `chpwd` hook
-exports `DOTENV_PROJECT` / `DOTENV_PROJECT_COLOR`, which the oh-my-posh segment
-reads — so it updates instantly on `cd`, is correct per pane, and shows nothing
-outside `~/code`. Pin a new project by adding a line to the map.
+### Shell
 
-## Terminal tools (cheat-sheet)
-
-Modern replacements for everyday commands — aliased in `~/.zshrc`, each guarded
-so a barebones container falls back to the original command:
-
-| Command | What it does |
-|---|---|
-| `ls` / `ll` / `la` | [`eza`](https://eza.rocks) — `ls` with icons, colors and git status |
-| `lt` | `eza` 2-level directory tree |
-| `cat` | [`bat`](https://github.com/sharkdp/bat) — `cat` with syntax highlighting (Catppuccin Macchiato; plain when piped) |
-
-**Shell amenities** (zsh, all guarded — no-op if the tool is missing):
+Modern replacements, aliased in `~/.zshrc` and guarded so a barebones container falls
+back to the original command:
 
 | Key / command | What it does |
 |---|---|
-| _start typing_ | greyed **autosuggestion** from history (`→` accepts) via [zsh-autosuggestions](https://github.com/zsh-users/zsh-autosuggestions), plus live **syntax highlighting** via [fast-syntax-highlighting](https://github.com/zdharma-continuum/fast-syntax-highlighting) |
+| `ls` / `ll` / `la` / `lt` | [`eza`](https://eza.rocks) — icons, colors, git status; `lt` is a 2-level tree |
+| `cat` | [`bat`](https://github.com/sharkdp/bat) — syntax highlighting (Catppuccin Macchiato; plain when piped) |
+| _start typing_ | greyed **autosuggestion** from history (`→` or `Tab` accepts) via [zsh-autosuggestions](https://github.com/zsh-users/zsh-autosuggestions), plus live **syntax highlighting** via [fast-syntax-highlighting](https://github.com/zdharma-continuum/fast-syntax-highlighting) |
+| `g` `gs` `gd` `gl` `gco` `gp` `gpl`, `k` | [zsh-abbr](https://github.com/olets/zsh-abbr) **abbreviations**: they expand in place on Space/Enter (`gs` → `git status -sb`, `k` → `kubecolor`, or `kubectl` without it), so history and atuin record the real command. Plain aliases where zsh-abbr is missing |
 | `z <dir>` / `zi` | [zoxide](https://github.com/ajeetdsouza/zoxide) — smart `cd` by frecency / interactive fuzzy pick |
-| `Ctrl-T` / `Alt-C` / `Tab` | fzf (**Catppuccin-themed, bat/eza previews**): insert a file / `cd` into a subdir / fuzzy completion menu (`Ctrl-R` stays [atuin]) |
+| `Ctrl-T` / `Alt-C` / `Tab` | fzf (**Catppuccin-themed, bat/eza previews**): insert a file / `cd` into a subdir / fuzzy completion menu (fzf-tab) |
+| `Ctrl-R` | [atuin](https://atuin.sh) — one shell history, synced across machines after `secrets login atuin` ([1Password](#1password)) or `atuin login -u <user> -k <key>` |
 | `Esc` `Esc` | toggle a leading `sudo` (on an empty line, prefixes the previous command) |
 | `git diff` / `log` / `show` | [delta](https://dandavison.github.io/delta) — syntax-highlighted, line-numbered diffs (Catppuccin) |
 | `man <cmd>` | colored man pages (rendered through bat) |
 | `cd <repo>` | [direnv](https://direnv.net) + 1Password: a repo's `.envrc` loads `op://` secrets on entry, unloads on leave — nothing secret on disk (`use_op` helper) |
 
-[atuin]: https://atuin.sh
+The **prompt** has a **transient prompt** (past lines collapse to a `❯`, red on
+failure), a **right-prompt** (`✓`/`✗` exit code, exec-time when >2s, clock), and a
+**kube-context guard** (`⎈ ctx:ns` — peach on a remote cluster, teal on local, hidden
+when none). **`ssh`** auto-uses `kitten ssh` in a bare kitty shell (not inside tmux,
+where the kitten's handshake breaks) so terminfo/colors work on every remote.
 
-**tmux popups** (floating, dismiss on exit):
+### tmux
+
+The prefix is `C-a`. tmux never starts on its own — run `tmux`, or `tmux-sessionizer`
+(the `M-f` picker) from a plain shell. On the Mac, `M-` is the **right** Option key.
 
 | Key | What it does |
 |---|---|
 | `M-f` | fzf **project switcher** — pick a `~/code` project; it becomes a tmux session (lights up the color bar) |
-| `M-s` | **ssh + port-forward launcher** — fzf over `~/.ssh/config` hosts + saved forwards (`~/.config/ssh-launch/targets`, a local file); opens in a named window. Type an unlisted host to ssh ad-hoc. Also runnable as `ssh-launch`. |
-| `prefix`+`g` / `cmd`+`g` | **lazygit** — stage hunks, rebase, stash (Catppuccin + delta; `cmd+g` is the kitty overlay) |
+| `M-s` | **ssh + port-forward launcher** — fzf over `~/.ssh/config` hosts + saved forwards (`~/.config/ssh-launch/targets`, a local file); opens in a named window. Type an unlisted host to ssh ad-hoc |
+| `prefix`+`g` / `cmd`+`g` | **lazygit** — stage hunks, rebase, stash (`cmd+g` is the kitty overlay) |
 | `prefix`+`Tab` | **extrakto** — fuzzy-grab any path / SHA / pod-name / URL off the screen |
+| `prefix`+`h`/`j`/`k`/`l`, `M-←↑↓→` | move between panes |
+| `prefix`+`-` / `prefix`+`\|` | split below / beside, in the pane's directory |
+| `M-H` / `M-L`, `prefix`+`C-p` / `C-n`, `prefix`+`a` | previous / next window, last window (`prefix`+`L` swaps left) |
+| `prefix`+`[`, then `v` … `y` | vi copy mode; `y` copies (see [below](#copy--paste)); `prefix`+`r` reloads the config |
 
-**Prompt** also gains a **transient prompt** (past lines collapse to a `❯`, red on failure), a **right-prompt** (`✓`/`✗` exit code, exec-time when >2s, clock), and a **kube-context guard** (`⎈ ctx:ns` — peach on a remote cluster, teal on local, hidden when none). **`ssh`** auto-uses `kitten ssh` in a bare kitty shell (not inside tmux, where the kitten's handshake breaks) so terminfo/colors work on every remote.
+**tmux inside tmux** (a tmux on the Mac, `vm shell hsg`, a tmux in the VM): `C-a <key>`
+goes to the **outer** session, `C-a C-a <key>` to the **inner** one (`C-a C-a c` opens
+a window inside). A tmux server **not on the Mac** gets a lighter status bar and a warm
+active-pane border. Detection is `$SSH_CONNECTION` or a `lima-*` hostname (`limactl
+shell` sets no ssh variables); the server keeps whatever was true when it started, so
+it's a strong hint, not proof.
 
-Container & Kubernetes inspection — the **`dev`** feature (lazydocker/ctop/dive, via
-[`Brewfile.dev`](Brewfile.dev)) and the **`k8s`** feature (the rest, via
-[`Brewfile.k8s`](Brewfile.k8s)); `docker`, `docker compose` and `kubectl` themselves
-come from OrbStack, which is macOS-only — in a Linux VM `dev` brings lazydocker and
-dive only, and the engine comes from the `docker` feature:
+### Copy & paste
+
+- **tmux**: drag with the mouse, or `y` in copy mode. With `set-clipboard on` tmux
+  sends it to the outer terminal as OSC 52, so it reaches the Mac clipboard over ssh and
+  from a Lima VM. Dragging over `less` (or any app not tracking the mouse) works too.
+- **Neovim**: marking text with the mouse (drag, double-click a word, triple-click a
+  line) copies it on release; keyboard `y` copies too (`unnamedplus`). On Linux with no
+  `DISPLAY`/`WAYLAND_DISPLAY` (Lima VM, container, ssh box) that goes out as OSC 52, and
+  `"+p` pastes nvim's own last yank — paste from the Mac with Cmd+V.
+- **Scripts**: `cmd | osc52-copy` (on Linux also `pbcopy`) puts stdin on the clipboard
+  of the terminal you are *looking at*.
+- **kitty** (macOS): copy-on-select; hold Shift while dragging over an app that grabbed
+  the mouse. `ctrl+shift+p>` then `shift+f` / `h` / `w` **copies** a path / git hash /
+  word off the screen (hints); kitty's own defaults insert a path (`f`) or line (`l`) and
+  open file:line (`n`).
+
+### Dev tooling
+
+The **`devlite`** feature ([`Brewfile.devlite`](Brewfile.devlite); also pulled in by
+`dev`):
+
+| Command | What it does |
+|---|---|
+| `jq` / `yq` | query & transform JSON / YAML (manifests, `-o json`, API output) — mikefarah's `yq` on both OSes |
+| `gh` / `ghd` | GitHub CLI (PRs/issues/reviews) + `gh dash` TUI dashboard (Catppuccin) |
+| `wt switch -c <branch>` | [worktrunk](https://github.com/max-sixty/worktrunk): a linked git **worktree** in a sibling `<repo>.<branch>` dir, and `cd` into it; `wt list`, `wt merge` (also deletes the branch), `wt remove`. Where `wt` is missing, `gwt <branch>` / `gwt-rm <branch>` do the basic create/remove with the same layout |
+| `btop` | system monitor (CPU/mem/net/processes) |
+| macOS only | `mise` (per-project tool versions + tasks, switches on `cd`), `git absorb` (route fixups into the right commit), `dust` / `duf` / `procs` (prettier `du` / `df` / `ps`) |
+
+### Containers & Kubernetes
+
+The **`dev`** and **`k8s`** features. On the Mac `docker`, `docker compose` and
+`kubectl` come from OrbStack; in a Linux VM from the `docker` and `k8s` features:
 
 | Command | What it does |
 |---|---|
 | `lazydocker` | TUI dashboard for Docker — containers, images, volumes, logs |
-| `ctop` | top-like live CPU/mem/net per running container |
 | `dive` | explore a Docker image layer by layer to find wasted space |
-| `k9s` | full-screen TUI for Kubernetes — Catppuccin Macchiato skin (blue-accented), configured to show full logs |
-| `kubectx` | switch between Kubernetes clusters/contexts by name |
-| `kubens` | switch the active Kubernetes namespace |
-| `k` | [kubecolor](https://github.com/kubecolor/kubecolor) — colorized `kubectl` (blue) + completion; plain `kubectl` where kubecolor is absent (Linux) |
-| `stern` | tail & color-code logs from multiple pods at once |
+| `sofka` | Kubernetes TUI — any CRD, Flux/Argo actions, `X` incident view (Catppuccin Macchiato) |
+| `k` | abbreviation for [kubecolor](https://github.com/kubecolor/kubecolor) (colorized `kubectl`; `kubectl` itself is aliased to it too) — plain `kubectl` where kubecolor is absent (Linux) |
+| `kubectx` / `kubens`, `stern` | switch context / namespace by name; tail many pods' logs at once (macOS) |
 | `helm` | install, upgrade & inspect apps packaged as Helm charts |
 | `helmfmt` | format the Go-template side of a chart (`{{ if }}`/`range` indentation) without touching its YAML |
+| `argocd` | Argo CD CLI; its login is shared between VMs |
 
-**More dev tooling** — the **`devlite`** feature ([`Brewfile.devlite`](Brewfile.devlite),
-also pulled in by `dev`); on Linux neovim/node/jq/direnv/btop/lazygit and gh (+ `ghd`) arrive
-too, while yq/mise/git-absorb/dust/duf/procs stay macOS-only (`gwt` is a zsh function, everywhere):
+### Per-project prompt badge
 
-| Command | What it does |
-|---|---|
-| `jq` / `yq` | query & transform JSON / YAML (manifests, `-o json`, API output) |
-| `mise` | per-project tool versions (Go/Python/Node/Dart) + tasks; auto-switches on `cd` |
-| `gh` / `ghd` | GitHub CLI (PRs/issues/reviews) + `gh dash` TUI dashboard (Catppuccin) |
-| `git absorb` | auto-route fixup commits into the right history, then autosquash |
-| `gwt <branch>` | spin up a linked git **worktree** in a sibling dir (`gwt-rm` removes it) |
-| `dust` / `duf` / `procs` | prettier `du` / `df` / `ps` |
-| `btop` | system monitor (CPU/mem/net/processes) |
-| `cisco-vpn` | Cisco AnyConnect VPN with **Entra ID SSO** from the headless VM (**`vpn`** feature, Linux-only) — see [below](#cisco-vpn-entra-id-sso-from-the-lima-vm) |
-| kitty `ctrl+shift+p>…` | hints: grab a path (`f`), file:line (`n`), git hash (`h`), or line (`l`) off the screen |
+Folders under `~/code` (or `$DOTENV_CODE_ROOT`) get a colored badge in the prompt and
+the tmux status bar (e.g. `hsg` = green, `bechterew` = blue). A `chpwd` hook sets it, so
+it updates on `cd`, is correct per pane, and shows nothing outside `~/code`. Pin a color
+by adding a line to `DOTENV_PROJECT_COLOR_MAP` in `~/.zshrc`; any other project gets a
+stable color from the Catppuccin palette.
 
-**atuin sync** — shell history syncs to a self-hosted server on the home network.
-Set `sync_address` in [`atuin/config.toml`](home/dot_config/atuin/config.toml), then
-`secrets login atuin` (see [1Password](#1password)) — or by hand,
-`atuin login -u <user> -k <key>` + `atuin sync`. One history everywhere; the login
-itself survives VM rebuilds via [`dotenv-persist`](#logins-that-survive-a-rebuild).
+## Commands
 
-## Backlog.md boards
+Everything in [`home/dot_local/bin`](home/dot_local/bin), plus two tools from above:
 
-[Backlog.md](https://github.com/MrLesk/Backlog.md) keeps a project's tasks as markdown
-in the repo, with a terminal kanban board and a web UI. It comes with the `ai` feature
-(`npm i -g backlog.md`, prebuilt per-platform binaries, no node floor).
+| Command | For | Where | More |
+|---|---|---|---|
+| [`vm`](home/dot_local/bin/executable_vm) | purpose-built Lima VMs | macOS | `vm --help`, [Lima VMs](#lima-vms) |
+| [`dotenv-persist`](home/dot_local/bin/executable_dotenv-persist) | logins that survive a VM rebuild | VMs (no-op elsewhere) | `dotenv-persist --help`, [below](#logins-that-survive-a-rebuild) |
+| [`secrets`](home/dot_local/bin/executable_secrets) | 1Password → env vars and logins | everywhere | `secrets --help`, [below](#secrets-into-env-vars-and-logins) |
+| [`cisco-vpn`](home/dot_local/bin/executable_cisco-vpn.tmpl) | Cisco AnyConnect with Entra ID SSO, headless | Linux, `vpn` | `cisco-vpn --help`, [below](#cisco-vpn-entra-id-sso-from-the-lima-vm) |
+| [`osc52-copy`](home/dot_local/bin/executable_osc52-copy), `pbcopy` | stdin → your terminal's clipboard | everywhere; `pbcopy` Linux only | `osc52-copy --help` |
+| [`tmux-sessionizer`](home/dot_local/bin/executable_tmux-sessionizer) | the `M-f` project switcher | everywhere | script header |
+| [`ssh-launch`](home/dot_local/bin/executable_ssh-launch) | the `M-s` ssh/forward picker | everywhere | `ssh-launch --list`, script header |
+| `wt` | git worktrees (worktrunk) | `devlite` | `wt --help` |
+| `backlog` | markdown task boards | `ai` | [Backlog.md](#backlogmd-boards) |
 
-```sh
-backlog init "my project"     # --no-git for a filesystem-only board
-backlog task create "..."
-backlog board                 # kanban in the terminal
-backlog browser               # web UI on :6420
-```
+## Lima VMs
 
-Three things worth setting on a VM, none of which `init` gets right for this setup:
+[`vm`](home/dot_local/bin/executable_vm) builds purpose-specific Lima VMs on the Mac,
+each bootstrapping this repo with the right feature set:
 
 ```sh
-backlog config set autoOpenBrowser false        # there is no browser in the VM to open
-backlog completion install --shell zsh          # init installs BASH completions
-echo 'backlog/' >> .git/info/exclude            # keep the board out of the repo
+vm new scratch                          # core only — fastest build
+vm new work --profile devlite --mount ~/code
+vm new lab  --profile k8s --profile vpn # profiles COMBINE (same as --profile k8s,vpn)
+vm new big  --profile full --cpus 8 --memory 16 --disk 120
+vm resize work --cpus 8 --memory 16     # restarts it if running; disk can only grow
+vm ls | vm shell <name> | vm ssh <name> [-t] [cmd] | vm start|stop|rm <name>
 ```
 
-**`backlog browser` needs no port forwarding.** Lima forwards every guest loopback
-listener to the Mac's `127.0.0.1`, so the board served inside the VM opens at
-`http://localhost:6420` in the Mac's browser — the same mechanism the VPN SSO callback
-rides on. Two VMs on the same port collide on the host; `defaultPort` in
-`backlog/config.yml` (or `--port`) moves one. `autoOpenBrowser` is on by default and
-has nothing to open in a headless guest, so turn it off and click the URL yourself.
+It drives [`~/.lima/_templates/dotenv.yaml`](home/dot_lima/_templates/dotenv.yaml)
+(`template://dotenv`): the VM clones this repo on first boot and runs `install.sh`
+with the profile's `DOTENV_FEATURES`; a readiness probe makes a failed bootstrap fail
+`vm new`. Profiles, flags and the reasons: `vm --help` and the template's comments.
 
-Completions install to `~/.zsh/completions`, which is on no default `fpath` — the
-[`.zshrc`](home/dot_zshrc) adds it, before `compinit`, or they would be written and
-then silently ignored.
+### Mounts — your home directory is not shared
 
-**Keeping it out of the repo.** Backlog.md stores tasks in a *project-relative* folder
-(`backlog/` by default, config in `backlog/config.yml`), so it cannot be pointed
-outside the working tree. `.git/info/exclude` is the right lever: per-repo, and unlike
-a `.gitignore` line it is itself untracked, so nothing about the board reaches the
-project's history. [`~/.config/git/ignore`](home/dot_config/git/ignore) covers the
-`.backlog/` spelling globally for repos where you choose that name — deliberately
-*not* plain `backlog/`, since globally ignoring that would hide legitimately-named
-directories in unrelated repos (Backlog.md's own repo keeps its tasks in `backlog/`).
+`vm new work --mount ~/code --mount ~/notes:ro` shares just those (writable unless
+`:ro`); put the ones you always want in `~/.config/dotenv/vm-mounts`, skip them with
+`--no-mounts`.
+Two consequences: `limactl shell` can't land you in the host cwd unless it is mounted
+(it warns and drops you in `$HOME`), and **existing VMs keep the mounts they were
+created with** — only new ones are affected.
 
-Note that a non-MCP `init` also writes an `AGENTS.md` at the repo root, which is a
-tracked file in the project — exclude that too if you don't want it committed.
-
-**Persisting it** depends on where the repo lives, and the good case needs nothing:
-
-- **Repo on a `--mount`** (`vm new work --mount ~/code`): the folder is already on the
-  Mac's disk and survives `vm rm` for free. This is the shape to prefer.
-- **Repo cloned inside the VM**: it dies with the VM. `dotenv-persist project backlog`
-  moves it into the [shared store](#logins-that-survive-a-rebuild) under
-  `projects/<repo>/` and symlinks it back, so it survives rebuilds — and every VM on
-  that store sees the same board.
-
-## tmux inside tmux
-
-Easy to end up here: a tmux on the Mac, `vm shell hsg`, and a tmux inside the VM (started
-by hand, or by `.zshrc` when `TMUX_AUTOSTART=1`). Two servers, one `C-a`, and the outer one eats every keystroke.
-
-| Key | Goes to |
-|---|---|
-| `C-a <key>` | the **outer** session (the Mac's) |
-| `C-a C-a <key>` | the **inner** session — sends one prefix through |
-| `F12` | toggles the outer session **off entirely**; every key falls through until you press it again |
-
-`C-a C-a` is right for a one-off (`C-a C-a c` opens a window inside). `F12` is for
-when you're going to *work* in there: it unsets the outer prefix and swaps its key
-table for an empty one, so even a bare `C-a` reaches the inner tmux. Whichever tmux is
-outermost always wins `F12`, since it reads the terminal first — the key is never
-ambiguous.
-
-**The colour half**, because two identical status bars an inch apart are unreadable:
-
-- While the outer session is **off**, its bar goes flat grey. That is the signal that
-  your keys are landing somewhere else.
-- A tmux server that is **not on the Mac** gets a lighter status background and a warm
-  active-pane border, so the inner session is distinguishable at rest, without
-  toggling anything. Detection is `$SSH_CONNECTION` or a `lima-*` hostname — the
-  latter because `limactl shell` sets no ssh variables at all. The tmux server
-  inherits whichever was true when it started and outlives the connection, so it's a
-  strong hint, not proof.
-
-## Dev Containers
-
-**Still worth having, but for a narrower reason than when it was written.** It was
-built to keep an agent's blast radius small: Claude Code on the Mac, the repo's
-commands in a container. [Lima VMs](#lima-vms) now do that job better — the agent
-itself runs in the VM (`vm new work --profile ai --mount ~/code`), so nothing on the
-Mac is exposed, not just the command execution.
-
-What devcontainers still do that a VM does not: give a repo a **pinned, in-repo
-toolchain** that VS Code and your teammates get identically. That is orthogonal to
-isolation, and it is why this stays.
-
-Run them **inside a VM** with the `docker` feature, which installs a real docker engine
-there (the devcontainer CLI shells out to `docker` specifically, so containerd is not a
-substitute):
+### Browse through a VM's VPN
 
 ```sh
-vm new work --profile docker --profile ai --mount ~/code
-vm shell work
-cd ~/code/myrepo && dx npm test
+vm proxy hsg          # SOCKS5 on 127.0.0.1:1080 via that VM, in the background
+vm proxy lab 9090     # a second one, different port
+vm proxy status       # which are up, on which ports
+vm proxy stop [name]  # stop one, or all of them
 ```
 
-The [`devcontainer`](https://github.com/devcontainers/cli) CLI is installed, and this
-repo ships a [`.devcontainer/`](.devcontainer) so a repo's `git`/build/test commands run
-**inside a container** — with commit signing and push that still go through your
-**host 1Password agent**, no key or token ever entering the container.
+An SSH dynamic forward, so intranet names resolve inside the VM while the rest of the
+Mac stays off the VPN. Starting is idempotent (already up is a no-op, a dead one comes
+back on its previous port), so **when intranet pages stop loading**, re-run `vm proxy
+hsg`. If it is up but VPN targets still don't answer, the tunnel *inside* the VM is
+wedged: the watchdog from `cisco-vpn install-service` heals that, or run
+`vm shell hsg cisco-vpn heal`.
 
-How it works:
+## Logins that survive a rebuild
 
-- The container forwards the host SSH agent, exposed as `SSH_AUTH_SOCK`. Where that
-  socket comes from depends on the engine: OrbStack / Docker Desktop expose the Mac's
-  agent only at their magic `/run/host-services/ssh-auth.sock` (the real socket lives
-  outside their VM and can't be bind-mounted), while a dockerd **inside a Lima VM** can
-  mount the agent socket directly, since `ssh.forwardAgent` has already put it in that
-  VM's filesystem. `dx` detects which case it's in and sets `DEVCONTAINER_SSH_SOCK`;
-  `devcontainer.json` defaults to the magic path. macOS-only `op-ssh-sign` is absent
-  either way, so git's default `ssh-keygen` signer signs **through the forwarded
-  agent**; [`.devcontainer/setup.sh`](.devcontainer/setup.sh) wires
-  `gpg.format=ssh` + selects your *Github Key* out of the agent.
-- From the host, run repo commands through the **`dx`** wrapper
-  ([`~/.local/bin/dx`](home/dot_local/bin/executable_dx)): `dx git commit -m …`,
-  `dx git push`, `dx npm test`. It brings the container up on first use and
-  `devcontainer exec`s into it.
-- **Run signing commands in the foreground.** Signing/push pop a 1Password approval
-  on the host; a backgrounded `dx git commit` gets no click and signing fails.
-  (This is the "1Password for both" choice — autonomous-but-for-one-approval, not
-  fully hands-off. A dedicated offline signing key would remove the popup; not used,
-  to keep everything on the 1Password key.)
-- **Other repos:** copy this `.devcontainer/` as a template — keep the agent mount +
-  signing wiring, swap the image/features + `postCreate` for that project's toolchain.
+`vm new` mounts one small host directory (default `~/.local/share/dotenv/vm-logins`;
+`--persist DIR` / `--no-persist`) and
+[`dotenv-persist`](home/dot_local/bin/executable_dotenv-persist) symlinks the
+credential files into it. Log in once, on any VM; every VM after that starts logged in.
+It re-runs on every apply and every shell start, because atuin, `gh` and `claude`
+replace a credential by `rename()`, which swaps the symlink for a real file.
 
-VS Code can also bootstrap the dotfiles inside any container: set
-`"dotfiles.repository": "eigenmannmartin/dotenv"`
-(+ `"dotfiles.installCommand": "install.sh"`) in your VS Code settings; the host-only
-bits skip themselves inside containers. That path gets the plain `core` default, so
-set `DOTENV_FEATURES` in the container's environment if you want the dev toolchain —
-this repo's own [`.devcontainer/setup.sh`](.devcontainer/setup.sh) defaults itself to
-`core,devlite` for exactly that reason (`devlite`, not `dev`: you are already inside a
-container, so the container clients have nothing local to talk to). `dx` itself ships
-only with `devlite`/`dev`, since it needs the devcontainer CLI.
+Shared: atuin's key + session, `gh` hosts, your git identity, the 1Password
+service-account token, argocd's config, and Claude Code's credentials, `.claude.json`
+and transcripts. The list is `DEFAULT_PATHS` in the script, whose header and comments
+say why each entry is there (and why atuin's `history.db` and `~/.config/op` are not);
+add a path there, in the repo, to share another file. `dotenv-persist status` shows the
+state in a VM.
 
-## Cisco VPN (Entra ID SSO) from the Lima VM
-
-[`cisco-vpn`](home/dot_local/bin/executable_cisco-vpn.tmpl) connects this *headless*
-VM to a Cisco AnyConnect gateway even though the SAML/Entra ID login needs a browser
-(Linux-only — on the Mac itself use Cisco Secure Client with a real browser; the `vpn` feature installs nothing on macOS):
-
-```sh
-cisco-vpn install          # one-time: openconnect (>= 9.00) + vpnc-scripts via apt
-cisco-vpn vpn.example.com  # connect (Ctrl-C disconnects; extra args pass through)
-```
-
-openconnect's **external-browser** SAML flow prints the IdP URL (and drops it on
-the Mac clipboard via OSC 52) instead of spawning a browser, then listens on
-loopback port `29786` for the completion redirect. Lima auto-forwards guest
-listeners to the host, so you open the URL **on the Mac**, log in to Entra ID there
-(MFA and all), and the browser's final `localhost:29786` redirect lands back inside
-the VM.
-Requires the head-end to allow external-browser SAML
-(`authentication saml external-browser`); embedded-webview-only gateways can't do
-console SSO. When the session eventually expires the command exits — rerun it and
-redo the browser login (there's no headless token refresh; brief network drops
-reconnect on their own).
-
-**Embedded-only head-ends** — where plain mode dies with `No SSO handler` because
-the gateway forces the *embedded* AnyConnect webview (e.g. `vpn.unisg.ch`) — use
-the `sso` subcommand, which still runs entirely in the VM:
-
-```sh
-sudo apt install pipx && pipx install openconnect-saml   # one-time
-cisco-vpn sso vpn.unisg.ch/priv
-```
-
-[`openconnect-saml`](https://github.com/mschabhuettl/openconnect-saml) (maintained
-[openconnect-sso](https://github.com/vlaci/openconnect-sso) fork) supplies the
-webview openconnect lacks. Install the base package only — the `[gui]`/`[chrome]`
-extras need a display.
-
-The catch, and why `cisco-vpn sso` does more than shell out: **embedded mode never
-calls back to localhost.** Unlike the external-browser flow, the ASA ends the login
-on its own page (`sso-v2-login-final`) and leaves the token in the *browser* as the
-cookie named by `sso-v2-token-cookie-name` — `acSamlv2Token` on HSG, and not
-HttpOnly. So `cisco-vpn sso` prints the login URL (also OSC 52'd to your clipboard)
-and then relays that cookie into openconnect-saml's waiting callback server.
-openconnect-saml then does the `auth-reply` POST that swaps the SAML token for the
-real `webvpn` session cookie, which is what openconnect consumes. The session cookie
-never hits your terminal.
-
-**Automating that last inch** — load
-[`browser-extension/vpn-token-relay`](browser-extension/vpn-token-relay) as an
-unpacked extension in Chrome on the Mac (`chrome://extensions` → Developer mode →
-Load unpacked). It watches for the token cookie on the gateway and sends it to the
-callback itself, so the login is hands-free: open the URL, authenticate, tunnel up.
-It can read cookies for the configured gateway only, and sends to loopback only.
-Falling back: `cisco-vpn sso` still prints a one-click **bookmarklet**, and still
-accepts a pasted token.
-
-`cisco-vpn cookie` is the same handoff from a cookie you obtained some other way.
-
-Ctrl-C on an SSO session logs out server-side and burns the cookie — rerun to
-reconnect. And the zero-setup alternative remains: connect on the Mac with Cisco
-Secure Client, since Lima's user-mode networking re-originates guest traffic as
-host traffic, so the VM rides the host tunnel, DNS included.
-
-To use the tunnel the *other* way — a browser on the Mac reaching intranet sites
-through the VM — see [`vm proxy`](#browse-through-a-vms-vpn).
-
-### Running it as a service
-
-```sh
-cisco-vpn sso vpn.unisg.ch/priv -b   # connect, then detach
-cisco-vpn status [-v]                # interface, routes, DNS, traffic counters
-cisco-vpn health                     # is traffic actually FLOWING? (probe via tunnel)
-cisco-vpn heal                       # …and suspend+resume it if not
-cisco-vpn suspend                    # drop the tunnel, KEEP the session
-cisco-vpn resume                     # reconnect, no browser
-cisco-vpn stop                       # disconnect AND log out
-cisco-vpn install-service            # on boot: resume; every minute: heal if wedged
-```
-
-All of this rides on how openconnect handles signals: **SIGINT/SIGTERM log the session
-off** (the cookie dies with it), **SIGHUP disconnects without logging off** (the cookie
-stays usable), and **SIGUSR1** makes it dump connection stats. So `stop` is a real
-logout, while `suspend` leaves a session you can `resume` without touching a browser.
-The session (host, cookie, fingerprint) is saved to
-`~/.local/state/dotenv/vpn.session`, mode 0600, on the VM's own disk — deliberately
-*not* in the shared login store, since that would hand one VM's VPN session to every
-other VM.
-
-`install-service` is what makes it survive a **reboot**, and it exists for one reason:
-systemd stops services with SIGTERM, which openconnect treats as a clean logout — so
-without a unit that sets `KillSignal=SIGHUP`, rebooting kills the very session you were
-trying to keep. Sessions still expire server-side; when that happens `resume` fails and
-says so, and you redo the SSO login.
-
-**The wedge, and the watchdog.** A host sleep often leaves the tunnel *looking* up —
-openconnect alive, `tun0` present, routes installed — while nothing flows, which from
-the outside is indistinguishable from healthy. `health` therefore probes *through*
-the tunnel: targets come from `~/.config/dotenv/vpn-probe` (or `$CISCO_VPN_PROBE`) —
-`host[:port]`, a URL, or `dns:<ip>`, one per line, any one answering = healthy — and
-default to the **DNS servers the VPN itself pushed** (filtered to ones actually
-routed via the tunnel, so `--routes` restrictions and `--no-vpn-dns` don't produce
-false alarms; with `--no-vpn-dns` and no probe file there is nothing to probe with,
-and `health` says so instead of guessing). `heal` is that probe plus the fix you'd
-type by hand — suspend && resume — and `install-service` now also installs
-**`cisco-vpn-watch.timer`**, which runs `heal --auto` every minute: two failing
-sweeps 8s apart count as wedged (one blip doesn't bounce the tunnel), the reconnect
-goes through `systemctl restart cisco-vpn` (whose `KillSignal=SIGHUP` makes a
-restart literally suspend+resume, and keeps openconnect out of the timer's own
-soon-to-be-torn-down cgroup), and the result is verified by probing again — with
-the saved session carrying its `--routes`/`--no-vpn-dns` narrowing along, so an
-automatic resume never silently widens into a full tunnel.
-
-The watchdog also knows what is *not* a wedge, and leaves those alone: while the
-**gateway itself is unreachable** it just waits — the uplink is down (Mac asleep,
-cable out), a reconnect can't help, and no strike is recorded, so a transient
-outage never turns into a give-up; a young openconnect with no tun device yet is a
-**login in progress** (10-minute grace); `cisco-vpn suspend` and `systemctl stop
-cisco-vpn` are **deliberate** (respected until you `resume`/`start` — a reboot
-still resumes, as before: that's the boot unit's job); and auto-reconnects are
-capped at **3 per hour**, so a flaky probe target can't bounce a healthy tunnel
-all day. After **3 failed heals in a row** it parks itself — the session has
-almost always expired server-side, which only a human with a browser can fix —
-and `cisco-vpn status` shows why; a manual `heal`, a `resume`, or a fresh `sso`
-login resets it. Connections also pass `--force-dpd 30` now, so openconnect's own
-dead-peer detection catches most wedges within 30s and reconnects on the same
-cookie; the watchdog is the backstop for the states DPD sleeps through.
-
-One failure mode needs more than a probe: the tunnel still *flows* but the DNS
-config itself is gone (systemd-resolved restarted and forgot the per-link entries,
-or something rewrote `resolv.conf`). Probes would happily pass while every corporate
-lookup fails — so `health` also checks that the resolvers the VPN pushed (recorded
-by the connect shim in `~/.local/state/dotenv/vpn.dns`) are still configured, and
-treats their loss as wedged: the heal's suspend+resume re-runs the connect script,
-which re-registers them.
-
-`status` reads the tunnel device from `/sys/class/net/<dev>/statistics` and finds the
-process by pid file, falling back to a process scan so a foreground session is still
-visible (it labels which one it found). `-v` additionally sends SIGUSR1 and tails
-openconnect's own report — cipher, DTLS vs TLS, reconnects.
-
-### Restricting what goes through the tunnel
-
-```sh
-cisco-vpn sso vpn.unisg.ch/priv --routes 130.0.0.0/8
-printf '10.1.0.0/16\n192.168.50.0/24\n' > ~/.config/dotenv/vpn-routes   # or set it once
-cisco-vpn sso vpn.unisg.ch/priv --no-vpn-dns    # keep this VM's resolver too
-```
-
-openconnect passes the head-end's config to `vpnc-script` through the environment,
-and `vpnc-script` installs one route per `CISCO_SPLIT_INC_<n>_*` triple — falling back
-to a **default route through the tunnel** when `CISCO_SPLIT_INC` is unset. So every
-connect generates a shim that rewrites those variables and then hands off to the real
-`vpnc-script`. That beats fixing up `ip route` after the fact: there's no race, and it
-re-applies on every reconnect. Setting a *lower* count also masks any extra ranges the
-server pushed, since the loop only reads indices below it — and it narrows a
-full-tunnel group just as well as a split one. The shim lives at
-`~/.local/state/dotenv/vpn-connect-script`, not in a temp file: openconnect re-runs
-it on every DPD reconnect and on disconnect, long after the wrapper has exited.
-
-**DNS is the shim's other job.** Left alone, `vpnc-script` replaces `resolv.conf`
-wholesale — and on a systemd-resolved box it does so by writing *through* the
-`/etc/resolv.conf` symlink into resolved's own generated stub file. That's two
-outages in one: resolved regenerates that file whenever it pleases (a restart from
-`unattended-upgrades` is enough) and silently drops the VPN DNS mid-session — the
-classic "the VPN loses DNS from time to time", invisible to any tunnel probe because
-the tunnel is fine — and until then *every* lookup in the VM, public included, rides
-resolvers only reachable through the tunnel, so any wedge kills all DNS. So when
-systemd-resolved is up, the shim keeps `vpnc-script` away from `resolv.conf` and
-registers the pushed resolvers **per-link** instead (`resolvectl dns/domain <tun>`):
-with `--routes`, only the VPN's search domain (plus the matching reverse zones) is
-routed to them and public lookups stay on the local resolver; without `--routes`
-they become the lookup default — still per-link, still nothing for resolved to
-clobber, and the config dies with the tun device so disconnects need no restore.
-Without resolved, the old file-rewrite behavior remains as the fallback.
-
-`--no-vpn-dns` unsets `INTERNAL_IP4_DNS`/`CISCO_DEF_DOMAIN` entirely, keeping this
-VM's resolver untouched. The trade is that intranet hostnames stop resolving, so
-you'd address those by IP.
-
-Routes are resolved from `--routes`, then `$CISCO_VPN_ROUTES`, then
-`~/.config/dotenv/vpn-routes` (`#` comments allowed), and are validated before
-anything connects. Applies to all three modes — plain, `sso` and `cookie`.
-
-## Neovim (LazyVim)
-
-A [LazyVim](https://www.lazyvim.org/) config ships to `~/.config/nvim` (Catppuccin
-Macchiato, to match the terminal). On the **first `nvim` launch** it bootstraps
-`lazy.nvim` and installs every plugin — give it a moment, then restart nvim.
-Verify with `:LazyHealth`. Language support — Go, Python, Docker, k8s-YAML (+ Helm
-schemas), Dart, and a DAP debugger — is enabled in
-[`lua/plugins/lang.lua`](home/dot_config/nvim/lua/plugins/lang.lua); Mason
-auto-installs the LSPs/linters/formatters on first launch. Your own overrides also
-live in `lua/plugins/` (e.g.
-[`colorscheme.lua`](home/dot_config/nvim/lua/plugins/colorscheme.lua)); the committed
-`lazy-lock.json` pins all plugin versions for reproducible installs.
-
-## Host-only vs container-safe
-
-- **Host-only** (ignored in containers via [`home/.chezmoiignore`](home/.chezmoiignore)):
-  the `kitty` config (a desktop GUI terminal). The macOS-only 1Password
-  `op-ssh-sign` signer is also host-only — containers fall back to signing
-  through the forwarded host SSH agent (see [Dev Containers](#dev-containers)).
-- **Container-safe**: zsh, tmux, vim, git config. External tools are
-  `command -v`-guarded so a barebones image no-ops cleanly. The bridge into a
-  container is **terminfo + the forwarded host SSH agent** — keys never enter
-  the container.
+**git identity**: `vm new` copies the host's `user.name`/`user.email` into
+`~/.config/git/identity` in the store once, and every VM's `~/.gitconfig` includes it.
+Only the identity: the Mac's own `~/.gitconfig` points commit signing at
+`/Applications/1Password.app`, which a Linux guest does not have.
 
 ## 1Password
 
-- SSH auth uses the 1Password agent (`SSH_AUTH_SOCK`, guarded so the forwarded
-  agent wins inside containers). Lima VMs get it too — the template sets
-  `ssh.forwardAgent`, so `git push` and SSH commit signing work in a VM without any
-  key material ever entering it.
-- Commit signing uses `gpg.format = ssh` + 1Password's `op-ssh-sign` (see
-  [`git/1password-signing.gitconfig`](git/1password-signing.gitconfig)).
+SSH auth uses the 1Password agent (`SSH_AUTH_SOCK`, only when its socket exists, so a
+forwarded agent wins inside containers). Lima VMs get it through `ssh.forwardAgent`, so
+`git push` works in a VM, and SSH commit signing can use the same agent, without key
+material ever entering it. Commit signing on the Mac (1Password's `op-ssh-sign`) lives
+in that machine's own `~/.gitconfig`; this repo does not manage it.
 
 ### Secrets into env vars and logins
 
@@ -688,79 +294,104 @@ moment you need them — nothing is written to disk, nothing lingers in your she
 
 ```sh
 secrets run -- terraform apply    # command runs with every ref exported
-secrets shell                     # subshell with them exported
+secrets run -- zsh                # …or a subshell with them (exit drops them)
 secrets get GH_TOKEN              # one value
 secrets login atuin|gh|all        # drive a tool's login with them
 secrets ls | secrets check
 ```
 
-The map lives in `~/.config/dotenv/secrets.env` — plain `NAME=op://vault/item/field`
-lines, no secret values, so it is safe to read and safe to keep. chezmoi *creates* it
-once and then leaves it alone, so your edits stick.
+The map is `~/.config/dotenv/secrets.env` — `NAME=op://vault/item/field` lines, no
+values; chezmoi creates it once and then leaves your edits alone. In a headless VM, put
+a 1Password **service account** token in `~/.config/dotenv/op-service-account-token`
+(chmod 600); `dotenv-persist` shares it, so you paste it once. `op` itself is installed
+on first use (1Password's apt repo on Debian/Ubuntu, the cask on macOS).
 
-**Auth in a headless VM**: `op` there can use neither Touch ID nor the desktop app,
-so use a 1Password **service account** — drop its token in
-`~/.config/dotenv/op-service-account-token` (chmod 600) and everything above is
-non-interactive. `dotenv-persist` shares that file across VMs, so you paste it once,
-ever. `secrets` reads it per-invocation and passes it only to `op`, so the token is
-never in the ambient environment. Without one, `op` falls back to prompting.
+## Cisco VPN (Entra ID SSO) from the Lima VM
 
-`secrets login` runs `dotenv-persist` afterwards, so a fresh login is immediately
-captured into the shared store and the next VM starts out logged in. `op` itself is
-installed on first use (the signed 1Password apt repo on Debian/Ubuntu, the cask on
-macOS), which keeps it off the critical path of a fast VM build.
+[`cisco-vpn`](home/dot_local/bin/executable_cisco-vpn.tmpl) connects a *headless* VM to
+a Cisco AnyConnect gateway even though the SAML/Entra ID login needs a browser. It is
+Linux-only — the `vpn` feature installs nothing on macOS.
+
+```sh
+cisco-vpn vpn.example.com              # external-browser SAML; open the printed URL on the Mac
+cisco-vpn sso vpn.unisg.ch/priv -b     # embedded-SAML head-ends; -b detaches
+cisco-vpn status | health | heal | suspend | resume | stop
+cisco-vpn install-service              # resume on boot + a minutely heal watchdog
+cisco-vpn sso vpn.unisg.ch/priv --routes 130.0.0.0/8   # only these through the tunnel
+```
+
+The login runs in the Mac's browser; Lima forwards the VM's loopback listener, so the
+final `localhost` redirect lands back in the VM. For a hands-free `sso`, load
+[`browser-extension/vpn-token-relay`](browser-extension/vpn-token-relay) unpacked in
+Chrome on the Mac; otherwise `sso` offers a bookmarklet or a pasted token, and
+`cisco-vpn cookie` takes a cookie obtained elsewhere. Modes, signals, the watchdog,
+split routes and DNS: `cisco-vpn --help` and the script's comments.
+
+The session is saved to `~/.local/state/dotenv/vpn.session` on the VM's own disk —
+deliberately *not* in the shared login store, which would hand one VM's VPN session to
+every other VM. The zero-setup alternative: connect on the Mac with Cisco Secure
+Client — Lima's user-mode networking re-originates guest traffic as host traffic, so
+the VM rides the host tunnel, DNS included. For the other direction (a Mac browser
+reaching the intranet through the VM), see [`vm proxy`](#browse-through-a-vms-vpn).
+
+## Neovim (LazyVim)
+
+A [LazyVim](https://www.lazyvim.org/) config (Catppuccin Macchiato) ships to
+`~/.config/nvim`. The **first `nvim` launch** installs every plugin — give it a moment,
+then restart nvim; verify with `:LazyHealth`. Go, Python, Docker, k8s-YAML (+ Helm),
+Dart and a DAP debugger are enabled in
+[`lua/plugins/lang.lua`](home/dot_config/nvim/lua/plugins/lang.lua), Mason installs
+their tools, and `lazy-lock.json` pins every plugin. Clipboard: see
+[Copy & paste](#copy--paste).
+
+The pinned LazyVim needs **Neovim ≥ 0.11.2** and a **C compiler** for treesitter. On
+macOS both come with Homebrew; on Linux, where apt's Neovim is too old, `devlite`
+installs the upstream release into `~/.local/opt/nvim` (linked as `~/.local/bin/nvim`)
+whenever the `nvim` on `PATH` is older than that, plus `build-essential`.
+
+## Backlog.md boards
+
+[Backlog.md](https://github.com/MrLesk/Backlog.md) keeps a project's tasks as markdown
+in the repo, with a terminal kanban board and a web UI. It comes with the `ai` feature.
+
+```sh
+backlog init "my project"                   # --no-git for a filesystem-only board
+backlog board                               # kanban in the terminal
+backlog browser                             # web UI on :6420
+backlog config set autoOpenBrowser false    # there is no browser in a VM to open
+backlog completion install --shell zsh      # init installs BASH completions
+echo 'backlog/' >> .git/info/exclude        # keep the board out of the repo
+```
+
+No port forwarding needed: Lima forwards guest loopback listeners, so the board opens
+at `http://localhost:6420` on the Mac (two VMs on one port collide; `--port` moves one).
+`~/.zshrc` puts `~/.zsh/completions` on `fpath`. A non-MCP `init` also writes a tracked
+`AGENTS.md` — exclude it too. A repo on a `--mount` keeps its board through `vm rm`; one
+cloned inside the VM dies with it.
 
 ## Dependencies & platforms
 
-`chezmoi apply` installs the packages for the machine's
-[enabled features](#feature-profiles) automatically — no separate step. `core` is
-the default, so a plain apply installs the shell and nothing else:
+`chezmoi apply` installs the packages for the [enabled features](#feature-profiles),
+from idempotent scripts in [`home/.chezmoiscripts/`](home/.chezmoiscripts):
 
-- **macOS**: Homebrew via [`Brewfile`](Brewfile) (core: tmux, atuin, oh-my-posh,
-  fzf, ripgrep, bat, eza, zoxide, git-delta, fd, the two zsh plugins, + casks
-  kitty & FiraCode Nerd Font, + **lima** for the VMs).
-  [`Brewfile.devlite`](Brewfile.devlite) adds neovim, node, jq/yq, gh, git-absorb, git-lfs, pre-commit, mise, direnv,
-  lazygit, dust/duf/procs/btop; [`Brewfile.dev`](Brewfile.dev) layers the container
-  half on top (**OrbStack** + lazydocker/ctop/dive);
-  [`Brewfile.k8s`](Brewfile.k8s) adds k9s/sofka/kubecolor/kubectx/stern/helm/argocd;
-  [`Brewfile.flutter`](Brewfile.flutter) adds fvm + CocoaPods for Flutter/iOS work
-  (macOS-only feature — Xcode comes from the App Store, and `~/.zshenv` exports
-  `DEVELOPER_DIR` so `xcrun simctl` works over ssh while `xcode-select` still points
-  at CommandLineTools). OrbStack
-  replaces Docker Desktop and provides the `docker`/`docker compose`/`kubectl`
-  CLIs; open the app once after install to finish CLI + helper setup.
-- **Debian/Ubuntu**: `apt` for the core set — zsh/tmux/git/ripgrep/fzf/bat (+ `eza`,
-  `zoxide`, `git-delta` on 24.04+) — plus official installers for atuin &
-  oh-my-posh; kitty + Nerd Font on desktops only (skipped in containers and on
-  headless VMs) — atuin is symlinked into `~/.local/bin`, since its installer drops
-  it in `~/.atuin/bin`, which only `~/.zshrc` ever puts on PATH; it is run with
-  `--non-interactive`, without which it probes for a tty via `exec 3</dev/tty` and
-  dies silently under dash during `vm new`, where there isn't one. `devlite` adds
-  neovim/python3/nodejs/npm/jq/btop/direnv/gh/git-lfs/pipx from apt (+ the gh-dash extension), pre-commit via pipx, pnpm/prettier/devcontainer from npm, and lazygit from its GitHub release;
-  `dev` adds lazydocker + dive the same way (no OrbStack — macOS only — so pair it
-  with `docker` for an engine); `k8s` adds k9s, sofka and amtui the same way, argocd as a
-  bare release binary, runai from the Run:ai control plane (only when a persisted
-  `~/.runai/authentication.json` exists), plus kubectl from
-  dl.k8s.io (macOS gets kubectl from OrbStack, so this is Linux-only), helm from
-  get.helm.sh and helmfmt from its GitHub release (that one on macOS too — it has no
-  Homebrew formula); `vpn` adds
-  openconnect + vpnc-scripts + openconnect-saml, and bind9-dnsutils for the
-  watchdog's DNS probe. **`yq`, `mise`,
-  `git-absorb`, dust/duf/procs, ctop and kubectx/stern/kubecolor remain macOS-only** — install them from
-  Homebrew-on-Linux or upstream releases if you want them in a VM. LazyVim needs
-  Neovim ≥ 0.9 (0.10+ recommended) and a C compiler for treesitter; on older
-  Ubuntu install a newer `nvim` + `build-essential`.
-- **tpm + tmux plugins** are cloned to `~/.tmux/plugins`, and the zsh plugins not in
-  package managers (**fzf-tab**, and on Linux autosuggestions + fast-syntax-highlighting)
-  to `~/.local/share`, on both. git-delta is wired as git's pager.
+- **macOS**: `brew bundle --no-upgrade` over [`Brewfile`](Brewfile) plus the enabled,
+  additive [`Brewfile.devlite`](Brewfile.devlite) / [`.dev`](Brewfile.dev) /
+  [`.k8s`](Brewfile.k8s) / [`.flutter`](Brewfile.flutter). Open OrbStack once after
+  install. `~/.zshenv` exports `DEVELOPER_DIR` wherever Xcode.app is installed, so
+  `xcrun simctl` (the `flutter` workflow) works over ssh. helmfmt has no formula and
+  comes from its GitHub release on both OSes.
+- **Debian/Ubuntu**: apt for the distro packages (eza, zoxide and git-delta only where
+  the release packages them, e.g. Ubuntu 24.04+), pipx/npm for a few CLIs, and upstream
+  release binaries — fzf, atuin, oh-my-posh, lazygit, Neovim, yq, wt, lazydocker, dive,
+  sofka, argocd, kubectl, helm, helmfmt — into `~/.local/bin` (Neovim's whole tree into
+  `~/.local/opt/nvim`, linked from there) through one `install_bin` helper. It also
+  makes zsh your login shell (`chsh`; opt out with `DOTENV_NO_CHSH=1`).
+- **Both**: the zsh and tmux plugins come from
+  [`.chezmoiexternal.toml`](home/.chezmoiexternal.toml) (needs `git` at apply time;
+  `chezmoi apply -R` forces a refresh; a refresh that fails offline stops the apply,
+  `chezmoi apply -k` gets past it; catppuccin is pinned to a release tag you bump by
+  hand). delta is wired as git's pager.
 
-Installers are idempotent, self-gating (GUI bits skipped in containers), and live
-in [`home/.chezmoiscripts/`](home/.chezmoiscripts). On Linux the package script
-also makes zsh your login shell (`chsh`, via sudo where that is passwordless; it prints
-the command if it can't), effective at your next login — opt out with `DOTENV_NO_CHSH=1`.
-
-## Follow-ups (not yet wired)
-
-- More aliases / abbreviations (e.g. zsh-abbr)
-- Portable `~/.vimrc` (plain `vim` fallback; Neovim/LazyVim already wired)
-- zsh history tuning (fast `compinit -C` available — see the note in `dot_zshrc`)
+**Not yet wired:** a portable `~/.vimrc` (plain `vim` fallback), zsh's own history
+settings (`HISTSIZE`/`SAVEHIST` are unset; atuin holds the real history), and faster
+startup via `compinit -C` (see the note in `dot_zshrc`).
