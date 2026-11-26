@@ -176,13 +176,7 @@ dotenv-persist unshare .config/op   # reverse it; the real file goes back to $HO
 ```
 
 Shared by default: atuin's `key` + `session`, `gh/hosts.yml`, your git identity
-(`~/.config/git/identity` — see below), the 1Password service-account token, and three
-files for Claude Code —
-`.claude/.credentials.json` (the OAuth tokens), `.claude.json` (account, onboarding
-state, and the per-project list `/resume` is built from) and `.claude/projects/` (the
-session transcripts). All three, because with only the credentials shared a new VM
-came up logged in but re-ran onboarding with an empty `/resume`, which is
-indistinguishable from having lost the login.
+(`~/.config/git/identity` — see below) and the 1Password service-account token.
 
 Deliberately **not** shared, and worth knowing why:
 
@@ -193,6 +187,13 @@ Deliberately **not** shared, and worth knowing why:
   a symlink, and it has a `--config` flag but no environment variable, so there is no
   way to redirect it for every invocation. It also buys nothing: with a service
   account the token *is* the credential, and `secrets` reads that file itself.
+- Claude Code — login (`.claude/.credentials.json`), `.claude.json` and the session
+  transcripts (`.claude/projects/`) are **per VM**: log in once in each box. A shared
+  OAuth refresh token is rotated by whichever VM refreshes first, which silently logs
+  every other VM out, and concurrent sessions on different VMs fight over one
+  `.claude.json`. These used to be shared; `dotenv-persist` now removes any leftover
+  link to the store on its own, and the old copies in the store can be deleted on the
+  host.
 
 That second one generalises — share credential **files**, not config **directories**,
 and check that the tool tolerates a symlink before adding one.
@@ -207,13 +208,12 @@ Only the identity, not the whole `~/.gitconfig`: that file points commit signing
 `/Applications/1Password.app`, which does not exist in a Linux guest.
 
 `~/.zshrc` re-runs it (quietly, in the background) on every shell start, and you can
-re-run it by hand any time. That matters because atuin, `gh` and `claude` all replace
+re-run it by hand any time. That matters because atuin and `gh` replace
 a credential by `rename()`, which swaps out the symlink for a real file — after which
 the token they just refreshed lives in this VM alone and `vm rm` takes it with it.
 Re-running re-captures whatever came unlinked — newer file wins, and the one that
 loses is kept as `.dotenv-bak` rather than deleted. Waiting to be told to re-run was
-never going to work: `claude` rotates its OAuth token mid-session, hours after any
-login, without saying so.
+never going to work: the rewrite happens silently, long after any login.
 
 ## What's managed today
 

@@ -28,8 +28,9 @@
 # Your home directory is NOT shared (that is why the template does not use
 # template://ubuntu). Share directories explicitly with --mount, writable unless you
 # say :ro; put the ones you always want in ~/.config/dotenv/vm-mounts, one per line.
-# Logins (atuin, gh, claude, op…) are shared through one small host directory so they
-# survive a rebuild — see --persist and `dotenv-persist` inside the VM.
+# Logins (atuin, gh, op…) are shared through one small host directory so they survive
+# a rebuild — see --persist and `dotenv-persist` inside the VM. Claude Code is not:
+# each VM logs in and keeps its sessions on its own.
 set -euo pipefail
 
 TEMPLATE="${VM_TEMPLATE:-dotenv}"        # ~/.lima/_templates/dotenv.yaml

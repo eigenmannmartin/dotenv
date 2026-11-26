@@ -558,7 +558,7 @@ npm_global_install prettier prettier
 {{ if $ai }}
 # ai — coding agents. Both ship on npm with zero dependencies and self-update
 # afterwards, so this only has to bootstrap them. `claude` and `codex` authenticate
-# per machine; the credentials are shared between VMs by dotenv-persist.
+# per machine — claude deliberately stays per-VM (not in dotenv-persist's store).
 # The node floors come from each package's own "engines" field.
 npm_global_install @anthropic-ai/claude-code claude 22
 npm_global_install @openai/codex codex 16

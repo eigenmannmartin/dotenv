@@ -5,7 +5,8 @@
 # host directory (default ~/.local/share/dotenv/vm-logins, path recorded in
 # ~/.config/dotenv/persist-dir) and this replaces the credential files in $HOME with
 # symlinks into it. Log in once, on any VM, and every VM after that is already
-# logged in — atuin, gh, claude, and the 1Password service-account token.
+# logged in — atuin, gh, and the 1Password service-account token. Claude Code is
+# deliberately per-VM (see RETIRED_PATHS below).
 #
 #   dotenv-persist              link everything (idempotent; safe to re-run)
 #   dotenv-persist status       show what is shared, local, or not yet created
@@ -19,7 +20,7 @@
 # copies wins, and the loser is kept as .dotenv-bak rather than deleted.
 #
 # ~/.zshrc does that on every shell start, because remembering to is not a plan —
-# claude refreshes its OAuth token mid-session, silently, hours after any login.
+# gh and atuin rewrite their files by rename(), silently, long after any login.
 #
 # What is NOT shared, deliberately: atuin's history.db. SQLite over a virtiofs/sshfs
 # mount is a corruption risk, and it does not need sharing — the key and session
@@ -43,13 +44,6 @@ die() { echo "dotenv-persist: $*" >&2; exit 1; }
 # never looks at a shared path. Check for this before adding any config directory —
 # credential *files* are the safe thing to share.
 #
-# The three Claude Code entries are one unit — with only the credentials shared, a new
-# VM was logged in but re-ran onboarding and had no /resume list, which reads exactly
-# like "the login didn't persist":
-#   .claude/.credentials.json  the OAuth tokens
-#   .claude.json               account, onboarding state, and the per-project MRU list
-#                              /resume is built from — useless without the transcripts
-#   .claude/projects/          the transcripts themselves, one .jsonl per session
 # The two runai entries are what makes the CLI installable at all on a fresh VM:
 # every Run:ai control-plane download endpoint sits behind SSO, and the install
 # script (20-install-packages, k8s feature) bootstraps the binary with the bearer
@@ -60,14 +54,38 @@ DEFAULT_PATHS='
 .local/share/atuin/session
 .config/gh/hosts.yml
 .config/git/identity
-.claude/.credentials.json
-.claude.json
-.claude/projects/
 .config/dotenv/op-service-account-token
 .runai/authentication.json
 .runai/config.json
 .config/argocd/config
 '
+
+# Paths that USED to be shared and must not be any more. Claude Code is one login +
+# one session store per VM: a shared OAuth refresh token is rotated by whichever VM
+# refreshes first, which silently logs every other VM out, and concurrent sessions on
+# different VMs writing one .claude.json / transcript dir step on each other.
+# `link` removes any symlink still pointing into the store for these (and strips them
+# from a materialised persist-paths list), so existing VMs drop the shared copy on the
+# next shell start; each VM then logs in on its own. The store's copies are left
+# alone — delete them on the host once no VM points at them.
+RETIRED_PATHS='
+.claude/.credentials.json
+.claude.json
+.claude/projects/
+'
+
+retire_one() {
+  local rel="${1%/}"
+  safe_rel "$rel" || return 0
+  if [ -L "$HOME/$rel" ] && [ "$(readlink "$HOME/$rel")" = "$PERSIST/$rel" ]; then
+    rm -f "$HOME/$rel"
+    echo "  unshared $rel (now VM-local; log in again on this VM)"
+  fi
+  if [ -r "$LIST_FILE" ] && grep -qxF -e "$rel" -e "$rel/" "$LIST_FILE"; then
+    { grep -vxF -e "$rel" -e "$rel/" "$LIST_FILE" || true; } > "$LIST_FILE.tmp"
+    mv "$LIST_FILE.tmp" "$LIST_FILE"
+  fi
+}
 
 # One cleaned entry per line — comments, whitespace and blanks already gone, so the
 # consumers below can just read lines.
@@ -158,6 +176,9 @@ case "${1:-link}" in
     trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 
     echo "==> dotenv-persist: sharing logins via $PERSIST"
+    for rel in $RETIRED_PATHS; do
+      retire_one "$rel"
+    done
     while IFS= read -r rel; do
       link_one "$rel"
     done <<EOF
